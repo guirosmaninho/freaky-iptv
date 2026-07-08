@@ -17,14 +17,13 @@
   <img alt=".NET" src="https://img.shields.io/badge/.NET-8-512bd4.svg" />
 </p>
 
-Freaky IPTV is a Windows desktop IPTV player built with React, TypeScript,
-Electron, Vite, .NET 8, LibVLC, and FFmpeg.
+Freaky IPTV is a Windows desktop app for watching live TV from your own M3U
+playlists and XMLTV guides. It gives you a local interface for browsing
+channels, opening the EPG, and managing playback on your PC.
 
-It plays user-provided M3U playlists and XMLTV guides. It does not include,
-sell, proxy, or recommend IPTV subscriptions, channels, streams, playlists, or
-EPG data.
-
-Last reviewed: 2026-07-08.
+It is built with React, TypeScript, Electron, Vite, .NET 8, LibVLC, and
+FFmpeg. Freaky IPTV does not include, sell, proxy, or recommend IPTV
+subscriptions, channels, streams, playlists, or EPG data.
 
 ## Features
 
@@ -162,18 +161,6 @@ Do not include credentials, playlist URLs, EPG URLs, tokens, logs, screenshots,
 recordings, backups, or personal viewing data in public issues.
 
 Read [SECURITY.md](SECURITY.md) before reporting a vulnerability.
-
-## Discord Rich Presence
-
-Discord Rich Presence is optional. The repository includes a Discord
-Application/Client ID so the local Discord RPC integration can identify the app:
-
-```text
-1514411481259577364
-```
-
-This ID is public by design. It is not a bot token, client secret, webhook, or
-credential.
 
 ## CI and dependency updates
 
