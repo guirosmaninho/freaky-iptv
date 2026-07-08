@@ -1,0 +1,128 @@
+{
+  "name": "freaky-iptv",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Desktop IPTV player with programme guide, favourites and playback statistics.",
+  "author": "Freaky IPTV",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/guirosmaninho/freaky-iptv.git"
+  },
+  "bugs": {
+    "url": "https://github.com/guirosmaninho/freaky-iptv/issues"
+  },
+  "homepage": "https://github.com/guirosmaninho/freaky-iptv#readme",
+  "main": "main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "npm run build:native && concurrently --kill-others-on-fail \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "clean:native": "node scripts/clean-native-runtimes.cjs",
+    "build:native": "npm run clean:native && npm run build:dpapi-helper && npm run build:libvlc-proxy",
+    "build:dpapi-helper": "dotnet publish dpapi-helper/dpapi-helper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -o dpapi-runtime",
+    "prepare:windows-icon": "node scripts/create-windows-icon.cjs",
+    "build": "npm run prepare:windows-icon && npm run build:native && tsc -b && vite build",
+    "build:libvlc-proxy": "dotnet publish libvlc-proxy-helper/LibVlcProxyHelper.csproj -c Release -r win-x64 --self-contained true -p:DebugType=None -p:DebugSymbols=false -o libvlc-proxy-runtime && node scripts/prune-libvlc-runtime.cjs",
+    "lint": "eslint .",
+    "test": "node scripts/run-tests.cjs",
+    "test:e2e": "npm run build && playwright test",
+    "test:e2e:update-snapshots": "npm run build && set FREAKYIPTV_VISUAL_SNAPSHOTS=1&& playwright test --update-snapshots",
+    "preview": "vite preview",
+    "clean:release:win": "node scripts/clean-windows-release.cjs",
+    "package:win": "npm run clean:release:win && npm run build && electron-builder --win && npm run verify:package:win",
+    "verify:package:win": "node scripts/verify-windows-package.cjs",
+    "release:win": "npm test && npm run lint && npm run clean:release:win && npm run build && playwright test && electron-builder --win && npm run verify:package:win",
+    "smoke:full-hd": "node scripts/full-hd-smoke.cjs"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0",
+    "hls.js": "^1.6.16",
+    "mpegts.js": "^1.8.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.13.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^10.0.3",
+    "electron": "^42.3.3",
+    "electron-builder": "^26.15.2",
+    "eslint": "^10.3.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.6.0",
+    "playwright": "^1.55.0",
+    "puppeteer": "^25.1.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.59.2",
+    "vite": "^8.0.12",
+    "wait-on": "^9.0.10"
+  },
+  "build": {
+    "appId": "com.guiro.freakyiptv",
+    "productName": "Freaky IPTV",
+    "executableName": "Freaky IPTV",
+    "electronDist": "node_modules/electron/dist",
+    "copyright": "Copyright (c) 2026 Freaky IPTV",
+    "asar": true,
+    "asarUnpack": [
+      "dpapi-runtime/**",
+      "libvlc-proxy-runtime/**",
+      "node_modules/ffmpeg-static/**"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "main.cjs",
+      "electron/**",
+      "historyStorage.cjs",
+      "preload.cjs",
+      "package.json",
+      "THIRD_PARTY_NOTICES.md",
+      "dpapi-runtime/**",
+      "libvlc-proxy-runtime/**"
+    ],
+    "win": {
+      "icon": "build-resources/cat_icon.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "forceCodeSigning": false,
+      "signExts": [
+        "dpapi-helper.exe",
+        "LibVlcProxyHelper.exe"
+      ],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "artifactName": "Freaky IPTV-Setup-${version}-${arch}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Freaky IPTV",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    },
+    "portable": {
+      "artifactName": "Freaky IPTV-${version}-Portable-${arch}.${ext}",
+      "requestExecutionLevel": "user"
+    }
+  }
+}

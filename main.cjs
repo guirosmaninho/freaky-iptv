@@ -1,0 +1,2787 @@
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, powerSaveBlocker, safeStorage, shell } = require('electron');
+
+if (process.env.FREAKYIPTV_E2E === '1') {
+  app.disableHardwareAcceleration();
+}
+app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport');
+// Disable Chromium autoplay restrictions to prevent playback stalling on boot/channel change
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// Keep hardware acceleration and DirectComposition video paths enabled for lower CPU usage.
+app.commandLine.appendSwitch('disable-features', [
+  'CalculateNativeWinOcclusion'
+].join(','));
+
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const net = require('net');
+const tls = require('tls');
+const http = require('http');
+const https = require('https');
+const dns = require('dns');
+const zlib = require('zlib');
+const { execSync, spawn, spawnSync } = require('child_process');
+const { fileURLToPath } = require('url');
+const { normalizeHistoryList } = require('./historyStorage.cjs');
+const { decryptBackup, encryptBackup, mergeImportedData, validateBackupPassword } = require('./electron/backupCore.cjs');
+const { assertWritableDirectory, clampCaptureBounds, createUniqueMediaPath, decodePngDataUrl, sanitizeFilePart, validatePngBuffer } = require('./electron/mediaCore.cjs');
+const { createFileSnapshot, migrateLegacyData, restoreFileSnapshot } = require('./electron/storageCore.cjs');
+
+// Keep all application-owned state under LocalAppData. Tests can isolate this
+// with FREAKYIPTV_DATA_DIR without touching the user's real profile.
+const LOCAL_APP_DATA = process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE, 'AppData', 'Local');
+const LEGACY_DATA_DIR = path.join(LOCAL_APP_DATA, 'IptvPlayer');
+const DATA_DIR = process.env.FREAKYIPTV_DATA_DIR || path.join(LOCAL_APP_DATA, 'FreakyIPTV');
+const CACHE_DIR = path.join(DATA_DIR, 'cache');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+const CACHE_FILE = path.join(CACHE_DIR, 'snapshot.json');
+const HISTORY_FILE = path.join(DATA_DIR, 'watch_history.json');
+const DEFAULT_RECORDING_DIR = process.env.FREAKYIPTV_RECORDINGS_DIR || path.join(process.env.USERPROFILE || LOCAL_APP_DATA, 'Videos', 'Freaky IPTV');
+const MAX_TEXT_DOWNLOAD_BYTES = 150 * 1024 * 1024;
+const MAX_DECOMPRESSED_TEXT_BYTES = 150 * 1024 * 1024;
+const MAX_SETTINGS_PAYLOAD_BYTES = 1024 * 1024;
+const MAX_CACHE_PAYLOAD_BYTES = 256 * 1024 * 1024;
+const MAX_HISTORY_PAYLOAD_BYTES = 32 * 1024 * 1024;
+const MAX_URL_LENGTH = 8192;
+const MAX_REDIRECTS = 5;
+const MAX_DISCORD_PACKET_BYTES = 1024 * 1024;
+const MAX_DISCORD_ASSET_LENGTH = 256;
+const MAX_PNG_BYTES = 16 * 1024 * 1024;
+const PROJECT_URL = 'https://github.com/guirosmaninho/freaky-iptv';
+const NEW_ISSUE_URL = 'https://github.com/guirosmaninho/freaky-iptv/issues/new';
+const ALLOWED_EXTERNAL_URLS = new Set([PROJECT_URL, NEW_ISSUE_URL]);
+const TRUSTED_LOCAL_MEDIA_URLS = new Set();
+
+const migrationStatus = process.env.FREAKYIPTV_E2E === '1'
+  ? { migrated: false, status: 'test-isolated', copied: [] }
+  : migrateLegacyData({ legacyDir: LEGACY_DATA_DIR, dataDir: DATA_DIR });
+fs.mkdirSync(CACHE_DIR, { recursive: true });
+fs.mkdirSync(BACKUP_DIR, { recursive: true });
+app.setPath('userData', path.join(DATA_DIR, 'electron'));
+
+// --- Discord Rich Presence State (declared early so applyDiscordSettings can reference them at startup) ---
+let discordRpcSocket = null;
+let discordClientId = '1514411481259577364';
+let isDiscordConnected = false;
+let isConnecting = false;
+let discordConnectTimeout = null;
+let discordReadBuffer = Buffer.alloc(0);
+let currentDiscordSettings = { enabled: false, showChannel: true, clientId: '1514411481259577364' };
+let lastActiveChannelName = null;
+let lastActiveChannelStartTime = null;
+let lastActiveChannelLogoUrl = null;
+let lastActiveChannelProgramTitle = null;
+
+// Safe Encryption Key Derivation (Windows Machine GUID + Windows Username)
+let encryptionKey = null;
+function getEncryptionKey() {
+  if (encryptionKey) return encryptionKey;
+  try {
+    let machineGuid = '';
+    try {
+      const output = execSync('reg query HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography /v MachineGuid', { encoding: 'utf8' });
+      const match = output.match(/MachineGuid\s+REG_SZ\s+(\S+)/);
+      if (match && match[1]) {
+        machineGuid = match[1].trim();
+      }
+    } catch (e) {
+      machineGuid = process.env.COMPUTERNAME || 'NebulaDefaultMachineGuid';
+    }
+
+    const username = process.env.USERNAME || 'NebulaUser';
+    const salt = crypto.scryptSync(username, 'NebulaSalt', 16);
+    // Derive a 256-bit key from machine GUID and username
+    encryptionKey = crypto.pbkdf2Sync(machineGuid + '_' + username, salt, 10000, 32, 'sha256');
+    return encryptionKey;
+  } catch (err) {
+    console.error('Failed to derive encryption key, fallback to static salt:', err);
+    encryptionKey = crypto.pbkdf2Sync('FallbackMasterSecret', 'NebulaFallbackSalt', 10000, 32, 'sha256');
+    return encryptionKey;
+  }
+}
+
+// Encrypt new settings with Electron's OS-backed credential storage. Legacy
+// DPAPI/AES values remain readable below so existing users are migrated on save.
+function encrypt(text) {
+  if (!text) return '';
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('OS-backed encryption is not available.');
+  }
+  return `safeStorage:${safeStorage.encryptString(text).toString('base64')}`;
+}
+
+// Decrypt current and legacy settings formats.
+function decrypt(base64Text) {
+  if (!base64Text) return '';
+
+  if (base64Text.startsWith('safeStorage:')) {
+    try {
+      return safeStorage.decryptString(Buffer.from(base64Text.slice('safeStorage:'.length), 'base64'));
+    } catch (error) {
+      console.error('Failed to decrypt OS-protected settings:', error);
+      return '';
+    }
+  }
+  
+  // Check if it's using the native crypto fallback format
+  if (base64Text.startsWith('fallback:')) {
+    try {
+      const parts = base64Text.split(':');
+      const iv = Buffer.from(parts[1], 'hex');
+      const encryptedText = parts[2];
+      const decipher = crypto.createDecipheriv('aes-256-cbc', getEncryptionKey(), iv);
+      let decrypted = decipher.update(encryptedText, 'base64', 'utf8');
+      decrypted += decipher.final('utf8');
+      return decrypted;
+    } catch (fallbackErr) {
+      console.error('Crypto fallback decryption failed:', fallbackErr);
+      return base64Text;
+    }
+  }
+
+  try {
+    const helperPath = getUnpackedResourcePath(path.join('dpapi-runtime', 'dpapi-helper.exe'));
+    if (fs.existsSync(helperPath)) {
+      const result = spawnSync(helperPath, ['unprotect', base64Text], { encoding: 'utf8' });
+      if (result.status === 0 && result.stdout) {
+        return result.stdout.trim();
+      }
+    }
+    throw new Error('DPAPI helper not found or failed');
+  } catch (err) {
+    console.warn('DPAPI decryption failed, trying fallback crypto decrypt (in case key format matches):', err.message || err);
+    return base64Text;
+  }
+}
+
+// Atomic file writing
+function writeJsonAtomic(filePath, data) {
+  const tempPath = filePath + '.tmp';
+  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf8');
+  fs.renameSync(tempPath, filePath);
+}
+
+function normalizeOpenedReviewIds(values) {
+  if (!Array.isArray(values)) return [];
+  const result = [];
+  const seen = new Set();
+  for (let index = values.length - 1; index >= 0 && result.length < 128; index -= 1) {
+    const value = values[index];
+    if (typeof value !== 'string' || !/^(weekly|monthly|annual):[A-Za-z0-9._-]{1,48}$/.test(value) || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result.reverse();
+}
+
+function serializeSettingsForDisk(settings) {
+  return {
+    PlaylistUrl: encrypt(settings.playlistUrl),
+    EpgUrl: encrypt(settings.epgUrl),
+    LastPlayedChannelId: settings.lastPlayedChannelId || '',
+    FavoriteChannelIds: settings.favoriteChannelIds || [],
+    RecentlyViewedChannelIds: settings.recentlyViewedChannelIds || [],
+    Volume: settings.volume,
+    QualityMappings: settings.qualityMappings || null,
+    AutoRefreshHours: settings.autoRefreshHours,
+    AutoplayLastChannel: settings.autoplayLastChannel,
+    HistoryRetentionDays: settings.historyRetentionDays,
+    DiscordRpcEnabled: settings.discordRpcEnabled !== undefined ? settings.discordRpcEnabled : false,
+    DiscordShowChannel: settings.discordShowChannel !== undefined ? settings.discordShowChannel : true,
+    DiscordClientId: settings.discordClientId || '1514411481259577364',
+    Appearance: settings.appearance || 'system',
+    RecordingDirectory: settings.recordingDirectory || DEFAULT_RECORDING_DIR,
+    RecordingMode: 'source-mkv',
+    OpenedReviewIds: normalizeOpenedReviewIds(settings.openedReviewIds),
+    DismissedReviewIds: normalizeOpenedReviewIds(settings.dismissedReviewIds)
+  };
+}
+
+function saveSettingsToFile(settings) {
+  validateSettingsPayload(settings);
+  writeJsonAtomic(SETTINGS_FILE, serializeSettingsForDisk(settings));
+}
+
+// IPC Handlers
+function loadSettingsFromFile() {
+  if (!fs.existsSync(SETTINGS_FILE)) {
+    return {
+      playlistUrl: '',
+      epgUrl: '',
+      favoriteChannelIds: [],
+      recentlyViewedChannelIds: [],
+      volume: 80,
+      qualityMappings: null,
+      autoRefreshHours: 4,
+      autoplayLastChannel: true,
+      historyRetentionDays: 365,
+      discordRpcEnabled: false,
+      discordShowChannel: true,
+      discordClientId: '1514411481259577364',
+      appearance: 'system',
+      recordingDirectory: DEFAULT_RECORDING_DIR,
+      recordingMode: 'source-mkv',
+      openedReviewIds: [],
+      dismissedReviewIds: []
+    };
+  }
+  try {
+    const raw = fs.readFileSync(SETTINGS_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    
+    return {
+      playlistUrl: decrypt(data.PlaylistUrl || data.playlistUrl),
+      epgUrl: decrypt(data.EpgUrl || data.epgUrl),
+      lastPlayedChannelId: data.LastPlayedChannelId || data.lastPlayedChannelId || '',
+      favoriteChannelIds: data.FavoriteChannelIds || data.favoriteChannelIds || [],
+      recentlyViewedChannelIds: data.RecentlyViewedChannelIds || data.recentlyViewedChannelIds || [],
+      volume: data.Volume !== undefined ? data.Volume : (data.volume !== undefined ? data.volume : 80),
+      qualityMappings: data.QualityMappings || data.qualityMappings || null,
+      autoRefreshHours: data.AutoRefreshHours !== undefined ? data.AutoRefreshHours : 4,
+      autoplayLastChannel: data.AutoplayLastChannel !== undefined ? data.AutoplayLastChannel : true,
+      historyRetentionDays: data.HistoryRetentionDays !== undefined ? data.HistoryRetentionDays : 365,
+      discordRpcEnabled: data.DiscordRpcEnabled !== undefined ? data.DiscordRpcEnabled : false,
+      discordShowChannel: data.DiscordShowChannel !== undefined ? data.DiscordShowChannel : true,
+      discordClientId: data.DiscordClientId || '1514411481259577364',
+      appearance: ['system', 'light', 'dark'].includes(data.Appearance) ? data.Appearance : 'system',
+      recordingDirectory: typeof data.RecordingDirectory === 'string' && data.RecordingDirectory ? data.RecordingDirectory : DEFAULT_RECORDING_DIR,
+      recordingMode: 'source-mkv',
+      openedReviewIds: normalizeOpenedReviewIds(data.OpenedReviewIds || data.openedReviewIds),
+      dismissedReviewIds: normalizeOpenedReviewIds(data.DismissedReviewIds || data.dismissedReviewIds)
+    };
+  } catch (err) {
+    console.error('Failed to load settings:', err);
+    return {
+      playlistUrl: '',
+      epgUrl: '',
+      favoriteChannelIds: [],
+      recentlyViewedChannelIds: [],
+      volume: 80,
+      qualityMappings: null,
+      autoRefreshHours: 4,
+      autoplayLastChannel: true,
+      historyRetentionDays: 365,
+      discordRpcEnabled: false,
+      discordShowChannel: true,
+      discordClientId: '1514411481259577364',
+      appearance: 'system',
+      recordingDirectory: DEFAULT_RECORDING_DIR,
+      recordingMode: 'source-mkv',
+      openedReviewIds: [],
+      dismissedReviewIds: []
+    };
+  }
+}
+
+registerTrustedHandle('load-settings', () => {
+  return loadSettingsFromFile();
+});
+
+registerTrustedHandle('save-settings', (event, settings) => {
+  try {
+    saveSettingsToFile(settings);
+    applyDiscordSettings(settings.discordRpcEnabled, settings.discordShowChannel, settings.discordClientId);
+    return true;
+  } catch (err) {
+    console.error('Failed to save settings:', err);
+    return false;
+  }
+});
+
+registerTrustedHandle('load-cache', () => {
+  if (!fs.existsSync(CACHE_FILE)) return null;
+  try {
+    const raw = fs.readFileSync(CACHE_FILE, 'utf8');
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Failed to load cache:', err);
+    return null;
+  }
+});
+
+registerTrustedHandle('save-cache', (event, snapshot) => {
+  try {
+    assertPlainObject(snapshot, 'Cache snapshot');
+    assertPayloadSize(snapshot, MAX_CACHE_PAYLOAD_BYTES, 'Cache snapshot');
+    writeJsonAtomic(CACHE_FILE, snapshot);
+    return true;
+  } catch (err) {
+    console.error('Failed to save cache:', err);
+    return false;
+  }
+});
+
+registerTrustedHandle('load-history', () => {
+  if (!fs.existsSync(HISTORY_FILE)) return [];
+  try {
+    const raw = fs.readFileSync(HISTORY_FILE, 'utf8');
+    const list = JSON.parse(raw);
+    if (!Array.isArray(list)) return [];
+
+    const { cleaned, dirty } = normalizeHistoryList(list);
+
+    if (dirty) {
+      console.log(`[History] Cleaned up/normalized ${list.length} -> ${cleaned.length} history entries. Writing clean file...`);
+      writeJsonAtomic(HISTORY_FILE, cleaned);
+    }
+
+    return cleaned;
+  } catch (err) {
+    console.error('Failed to load watch history:', err);
+    return [];
+  }
+});
+
+registerTrustedHandle('save-history', (event, sessions) => {
+  try {
+    if (!Array.isArray(sessions)) throw new TypeError('History sessions must be an array.');
+    assertPayloadSize(sessions, MAX_HISTORY_PAYLOAD_BYTES, 'History sessions');
+    writeJsonAtomic(HISTORY_FILE, sessions);
+    return true;
+  } catch (err) {
+    console.error('Failed to save watch history:', err);
+    return false;
+  }
+});
+
+function getFileStorageInfo(filePath) {
+  try {
+    const stats = fs.statSync(filePath);
+    return {
+      bytes: stats.size,
+      updatedAtUtc: stats.mtime.toISOString()
+    };
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return { bytes: 0, updatedAtUtc: '' };
+    }
+    throw err;
+  }
+}
+
+function getUnpackedResourcePath(relativePath) {
+  const basePath = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked')
+    : __dirname;
+  return path.join(basePath, relativePath);
+}
+
+function assertPlainObject(value, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object.`);
+  }
+}
+
+function assertPayloadSize(value, maxBytes, label) {
+  const serialized = JSON.stringify(value);
+  if (typeof serialized !== 'string') {
+    throw new TypeError(`${label} is not serializable.`);
+  }
+  if (Buffer.byteLength(serialized, 'utf8') > maxBytes) {
+    throw new RangeError(`${label} is too large.`);
+  }
+}
+
+function assertBoundedString(value, label, maxLength, optional = false) {
+  if (optional && (value === undefined || value === null || value === '')) return;
+  if (typeof value !== 'string' || value.length > maxLength) {
+    throw new TypeError(`${label} must be a string no longer than ${maxLength} characters.`);
+  }
+}
+
+function assertStringArray(value, label, maxItems = 100000) {
+  if (!Array.isArray(value) || value.length > maxItems) {
+    throw new TypeError(`${label} must be an array with at most ${maxItems} items.`);
+  }
+  for (const item of value) {
+    assertBoundedString(item, `${label} item`, 1024);
+  }
+}
+
+function assertHttpUrlText(value, label, optional = false) {
+  if (optional && !value) return;
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new TypeError(`${label} must be a valid URL.`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new TypeError(`${label} must use HTTP or HTTPS.`);
+  }
+}
+
+function validateSettingsPayload(settings) {
+  assertPlainObject(settings, 'Settings');
+  assertPayloadSize(settings, MAX_SETTINGS_PAYLOAD_BYTES, 'Settings');
+  assertBoundedString(settings.playlistUrl, 'Playlist URL', MAX_URL_LENGTH, true);
+  assertBoundedString(settings.epgUrl, 'EPG URL', MAX_URL_LENGTH, true);
+  assertHttpUrlText(settings.playlistUrl, 'Playlist URL', true);
+  assertHttpUrlText(settings.epgUrl, 'EPG URL', true);
+  assertBoundedString(settings.lastPlayedChannelId, 'Last played channel id', 1024, true);
+  assertStringArray(settings.favoriteChannelIds || [], 'Favorite channel ids');
+  assertStringArray(settings.recentlyViewedChannelIds || [], 'Recently viewed channel ids');
+  const openedReviewIds = settings.openedReviewIds || [];
+  assertStringArray(openedReviewIds, 'Opened review ids', 128);
+  for (const value of openedReviewIds) {
+    assertBoundedString(value, 'Opened review id', 64);
+    if (!/^(weekly|monthly|annual):[A-Za-z0-9._-]{1,48}$/.test(value)) {
+      throw new TypeError('Opened review id has an invalid format.');
+    }
+  }
+  const dismissedReviewIds = settings.dismissedReviewIds || [];
+  assertStringArray(dismissedReviewIds, 'Dismissed review ids', 128);
+  for (const value of dismissedReviewIds) {
+    assertBoundedString(value, 'Dismissed review id', 64);
+    if (!/^(weekly|monthly|annual):[A-Za-z0-9._-]{1,48}$/.test(value)) {
+      throw new TypeError('Dismissed review id has an invalid format.');
+    }
+  }
+  if (settings.qualityMappings !== undefined && settings.qualityMappings !== null) {
+    assertPlainObject(settings.qualityMappings, 'Quality mappings');
+    for (const [key, value] of Object.entries(settings.qualityMappings)) {
+      assertBoundedString(key, 'Quality mapping key', 64);
+      assertBoundedString(value, 'Quality mapping value', 2048);
+    }
+  }
+  if (settings.discordClientId) {
+    assertBoundedString(settings.discordClientId, 'Discord client id', 32);
+    if (!/^\d+$/.test(settings.discordClientId)) throw new TypeError('Discord client id must contain only digits.');
+  }
+  if (settings.appearance !== undefined && !['system', 'light', 'dark'].includes(settings.appearance)) {
+    throw new TypeError('Appearance must be system, light, or dark.');
+  }
+  assertBoundedString(settings.recordingDirectory, 'Recording directory', 4096, true);
+  if (settings.recordingDirectory) assertWritableDirectory(settings.recordingDirectory);
+  if (settings.recordingMode !== undefined && settings.recordingMode !== 'source-mkv') {
+    throw new TypeError('Recording mode must be source-mkv.');
+  }
+}
+
+function isTrustedRendererUrl(urlText) {
+  try {
+    const parsed = new URL(urlText);
+    if (!app.isPackaged && process.env.FREAKYIPTV_E2E !== '1') {
+      return parsed.protocol === 'http:' &&
+        (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') &&
+        parsed.port === '5173';
+    }
+
+    if (parsed.protocol !== 'file:') return false;
+    return path.resolve(fileURLToPath(parsed)) === path.resolve(__dirname, 'dist', 'index.html');
+  } catch {
+    return false;
+  }
+}
+
+function isLoopbackHostname(hostname) {
+  const normalized = normalizeNetworkHostname(hostname).toLowerCase();
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
+}
+
+function normalizeTrustedLocalMediaUrl(urlText) {
+  try {
+    const parsed = new URL(urlText);
+    if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !isLoopbackHostname(parsed.hostname)) {
+      return null;
+    }
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function registerTrustedLocalMediaUrl(urlText) {
+  const normalized = normalizeTrustedLocalMediaUrl(urlText);
+  if (normalized) TRUSTED_LOCAL_MEDIA_URLS.add(normalized);
+  return normalized;
+}
+
+function unregisterTrustedLocalMediaUrl(urlText) {
+  const normalized = normalizeTrustedLocalMediaUrl(urlText);
+  if (normalized) TRUSTED_LOCAL_MEDIA_URLS.delete(normalized);
+}
+
+function isTrustedLocalMediaUrl(urlText) {
+  const normalized = normalizeTrustedLocalMediaUrl(urlText);
+  return Boolean(normalized && TRUSTED_LOCAL_MEDIA_URLS.has(normalized));
+}
+
+async function shouldBlockRendererNetworkRequest(details) {
+  if (!mainWindow || mainWindow.isDestroyed() || details.webContentsId !== mainWindow.webContents.id) {
+    return false;
+  }
+
+  if (isTrustedRendererUrl(details.url) || isTrustedLocalMediaUrl(details.url)) {
+    return false;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(details.url);
+  } catch {
+    return true;
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return false;
+  }
+
+  if (!app.isPackaged && process.env.FREAKYIPTV_E2E === '1' && isLoopbackHostname(parsed.hostname)) {
+    return false;
+  }
+
+  try {
+    await resolveNetworkTarget(parsed.hostname, false);
+    return false;
+  } catch (error) {
+    console.warn('Blocked renderer network request:', redactUrlForLogs(details.url), error.message || error);
+    return true;
+  }
+}
+
+function assertTrustedIpcSender(event) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    throw new Error('Rejected IPC from an untrusted webContents.');
+  }
+  if (!event.senderFrame || event.senderFrame !== mainWindow.webContents.mainFrame) {
+    throw new Error('Rejected IPC from a non-main frame.');
+  }
+  if (!isTrustedRendererUrl(event.senderFrame.url)) {
+    throw new Error('Rejected IPC from an untrusted renderer URL.');
+  }
+}
+
+function registerTrustedHandle(channel, handler) {
+  ipcMain.handle(channel, (event, ...args) => {
+    assertTrustedIpcSender(event);
+    return handler(event, ...args);
+  });
+}
+
+function registerTrustedOn(channel, handler) {
+  ipcMain.on(channel, (event, ...args) => {
+    assertTrustedIpcSender(event);
+    handler(event, ...args);
+  });
+}
+
+registerTrustedHandle('get-storage-info', () => {
+  const settingsInfo = getFileStorageInfo(SETTINGS_FILE);
+  const cacheInfo = getFileStorageInfo(CACHE_FILE);
+  const historyInfo = getFileStorageInfo(HISTORY_FILE);
+
+  return {
+    dataDir: DATA_DIR,
+    settingsFile: SETTINGS_FILE,
+    cacheFile: CACHE_FILE,
+    historyFile: HISTORY_FILE,
+    settingsBytes: settingsInfo.bytes,
+    cacheBytes: cacheInfo.bytes,
+    historyBytes: historyInfo.bytes,
+    cacheUpdatedAtUtc: cacheInfo.updatedAtUtc,
+    historyUpdatedAtUtc: historyInfo.updatedAtUtc,
+    migrationStatus
+  };
+});
+
+registerTrustedHandle('clear-cache', () => {
+  try {
+    fs.rmSync(CACHE_FILE, { force: true });
+    return true;
+  } catch (err) {
+    console.error('Failed to clear cache:', err);
+    return false;
+  }
+});
+
+registerTrustedHandle('clear-history', () => {
+  try {
+    writeJsonAtomic(HISTORY_FILE, []);
+    return true;
+  } catch (err) {
+    console.error('Failed to clear watch history:', err);
+    return false;
+  }
+});
+
+function readHistoryFromFile() {
+  if (!fs.existsSync(HISTORY_FILE)) return [];
+  const parsed = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
+  return Array.isArray(parsed) ? normalizeHistoryList(parsed).cleaned : [];
+}
+
+function createSafetySnapshot() {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const snapshotDir = path.join(BACKUP_DIR, `pre-import-${stamp}`);
+  return createFileSnapshot([SETTINGS_FILE, HISTORY_FILE], snapshotDir);
+}
+
+function restoreSafetySnapshot(snapshotDir) {
+  restoreFileSnapshot(snapshotDir);
+}
+
+registerTrustedHandle('select-recording-directory', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose recordings folder',
+    defaultPath: loadSettingsFromFile().recordingDirectory || DEFAULT_RECORDING_DIR,
+    properties: ['openDirectory', 'createDirectory']
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  return assertWritableDirectory(result.filePaths[0]);
+});
+
+registerTrustedHandle('open-recording-directory', async () => {
+  const directory = assertWritableDirectory(loadSettingsFromFile().recordingDirectory || DEFAULT_RECORDING_DIR);
+  const error = await shell.openPath(directory);
+  return error ? { ok: false, error } : { ok: true, path: directory };
+});
+
+registerTrustedHandle('get-app-version', () => {
+  return app.getVersion();
+});
+
+registerTrustedHandle('get-data-directory', () => {
+  return DATA_DIR;
+});
+
+registerTrustedHandle('open-data-directory', async () => {
+  const error = await shell.openPath(DATA_DIR);
+  return error ? { ok: false, error } : { ok: true, path: DATA_DIR };
+});
+
+registerTrustedHandle('open-external-url', async (event, url) => {
+  if (typeof url === 'string' && ALLOWED_EXTERNAL_URLS.has(url)) {
+    await shell.openExternal(url);
+    return true;
+  }
+  return false;
+});
+
+registerTrustedHandle('export-backup', async (event, password) => {
+  if (!validateBackupPassword(password)) return { ok: false, error: 'Password must contain at least 10 characters.' };
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export Freaky IPTV backup',
+    defaultPath: path.join(app.getPath('documents'), `FreakyIPTV_${new Date().toISOString().slice(0, 10)}.freakyiptv-backup`),
+    filters: [{ name: 'Freaky IPTV Backup', extensions: ['freakyiptv-backup'] }]
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  try {
+    const payload = {
+      schemaVersion: 1,
+      appVersion: app.getVersion(),
+      createdAtUtc: new Date().toISOString(),
+      settings: loadSettingsFromFile(),
+      history: readHistoryFromFile()
+    };
+    const envelope = await encryptBackup(payload, password);
+    writeJsonAtomic(result.filePath, envelope);
+    return { ok: true, path: result.filePath };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Backup export failed.' };
+  }
+});
+
+registerTrustedHandle('import-backup', async (event, password) => {
+  if (!validateBackupPassword(password)) return { ok: false, error: 'Password must contain at least 10 characters.' };
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Import Freaky IPTV backup',
+    filters: [{ name: 'Freaky IPTV Backup', extensions: ['freakyiptv-backup'] }],
+    properties: ['openFile']
+  });
+  if (result.canceled || !result.filePaths[0]) return { ok: false, canceled: true };
+
+  let snapshotDir = null;
+  try {
+    const stat = fs.statSync(result.filePaths[0]);
+    if (stat.size > 64 * 1024 * 1024) throw new Error('Backup is too large.');
+    const envelope = JSON.parse(fs.readFileSync(result.filePaths[0], 'utf8'));
+    const imported = await decryptBackup(envelope, password);
+    if (imported.schemaVersion !== 1 || !imported.settings || !Array.isArray(imported.history)) throw new Error('Backup could not be opened.');
+    const current = { settings: loadSettingsFromFile(), history: readHistoryFromFile() };
+    const merged = mergeImportedData(current, imported);
+    delete merged.settings.preferredStreamMode;
+    merged.settings.recordingMode = 'source-mkv';
+    const warnings = [];
+    if (!fs.existsSync(merged.settings.recordingDirectory || '')) {
+      merged.settings.recordingDirectory = DEFAULT_RECORDING_DIR;
+      warnings.push('The recording folder from the backup was unavailable. The default folder is being used.');
+    }
+    validateSettingsPayload(merged.settings);
+    assertPayloadSize(merged.history, MAX_HISTORY_PAYLOAD_BYTES, 'Imported history');
+    snapshotDir = createSafetySnapshot();
+    saveSettingsToFile(merged.settings);
+    writeJsonAtomic(HISTORY_FILE, normalizeHistoryList(merged.history).cleaned);
+    fs.rmSync(CACHE_FILE, { force: true });
+    applyDiscordSettings(merged.settings.discordRpcEnabled, merged.settings.discordShowChannel, merged.settings.discordClientId);
+    return { ok: true, settings: merged.settings, historyCount: merged.history.length, requiresSync: true, warnings };
+  } catch (error) {
+    if (snapshotDir) restoreSafetySnapshot(snapshotDir);
+    return { ok: false, error: 'Backup could not be opened. Check the password and file.' };
+  }
+});
+
+registerTrustedHandle('capture-playback-frame', async (event, request) => {
+  assertPlainObject(request, 'Capture request');
+  assertBoundedString(request.channelName, 'Channel name', 256);
+  let png;
+  if (request.pngDataUrl !== undefined) {
+    png = decodePngDataUrl(request.pngDataUrl, MAX_PNG_BYTES);
+  } else {
+    assertPlainObject(request.bounds, 'Capture bounds');
+    const bounds = clampCaptureBounds(request.bounds, mainWindow.getContentBounds());
+    const captured = await mainWindow.webContents.capturePage(bounds);
+    png = captured.toPNG();
+  }
+  if (png.length === 0) return { ok: false, error: 'The video frame could not be captured.' };
+  let outputPath;
+  let diskError = null;
+  let clipboardError = null;
+  try {
+    const directory = assertWritableDirectory(loadSettingsFromFile().recordingDirectory || DEFAULT_RECORDING_DIR);
+    outputPath = createUniqueMediaPath(directory, request.channelName, '.png');
+    fs.writeFileSync(outputPath, png, { flag: 'wx' });
+  } catch (error) {
+    diskError = error;
+  }
+  try {
+    clipboard.writeImage(nativeImage.createFromBuffer(png));
+  } catch (error) {
+    clipboardError = error;
+  }
+  if (!outputPath && clipboardError) return { ok: false, error: 'The screenshot could not be saved or copied.' };
+  return {
+    ok: true,
+    path: outputPath,
+    copiedToClipboard: !clipboardError,
+    error: diskError
+      ? 'The image was copied to the clipboard, but the file could not be saved.'
+      : (clipboardError ? 'The file was saved, but the image could not be copied to the clipboard.' : undefined)
+  };
+});
+
+registerTrustedHandle('copy-statistics-card', (event, request) => {
+  assertPlainObject(request, 'Statistics card request');
+  const png = validatePngBuffer(request.pngBytes, MAX_PNG_BYTES);
+  clipboard.writeImage(nativeImage.createFromBuffer(png));
+  return { ok: true, copiedToClipboard: true };
+});
+
+registerTrustedHandle('save-statistics-card', async (event, request) => {
+  assertPlainObject(request, 'Statistics card request');
+  assertBoundedString(request.suggestedName, 'Statistics card filename', 128);
+  const png = validatePngBuffer(request.pngBytes, MAX_PNG_BYTES);
+  const baseName = sanitizeFilePart(request.suggestedName || 'FreakyIPTV_Statistics');
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Save statistics image',
+    defaultPath: path.join(app.getPath('pictures'), `${baseName}.png`),
+    filters: [{ name: 'PNG image', extensions: ['png'] }]
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  const outputPath = result.filePath.toLowerCase().endsWith('.png') ? result.filePath : `${result.filePath}.png`;
+  fs.writeFileSync(outputPath, png);
+  return { ok: true, path: outputPath };
+});
+
+registerTrustedHandle('copy-text', (event, value) => {
+  assertBoundedString(value, 'Clipboard text', 32 * 1024);
+  clipboard.writeText(value);
+  return true;
+});
+
+let recordingProcess = null;
+let recordingStopPromise = null;
+let recordingRelayId = null;
+let recordingState = { status: 'idle', mode: null, path: null, startedAtUtc: null, bytes: 0, error: null };
+
+function emitRecordingState(patch = {}) {
+  recordingState = { ...recordingState, ...patch };
+  if (recordingState.path && fs.existsSync(recordingState.path)) {
+    recordingState.bytes = fs.statSync(recordingState.path).size;
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('recording-state-changed', recordingState);
+  return recordingState;
+}
+
+function resolveFfmpegPath() {
+  try {
+    const bundled = require('ffmpeg-static');
+    const unpacked = bundled.replace('app.asar', 'app.asar.unpacked');
+    if (fs.existsSync(unpacked)) return unpacked;
+  } catch {}
+  return 'ffmpeg';
+}
+
+async function stopSourceRecording() {
+  if (recordingStopPromise) return recordingStopPromise;
+  if (!recordingProcess) {
+    if (recordingState.status === 'recording' && recordingState.mode === 'source-mkv') {
+      return emitRecordingState({ status: 'completed', error: null });
+    }
+    return recordingState;
+  }
+  const proc = recordingProcess;
+  emitRecordingState({ status: 'finalizing' });
+  recordingStopPromise = new Promise(resolve => {
+    let settled = false;
+    let forced = false;
+    const finish = (code = 0) => {
+      if (settled) return;
+      settled = true;
+      recordingProcess = null;
+      recordingStopPromise = null;
+      const completedRelayId = recordingRelayId;
+      recordingRelayId = null;
+      if (completedRelayId) stopPlaybackRelay(completedRelayId);
+      const failed = forced || (code !== 0 && code !== null);
+      resolve(emitRecordingState(failed
+        ? { status: 'failed', error: 'FFmpeg could not finalize the recording. The partial file was preserved.' }
+        : { status: 'completed', error: null }));
+    };
+    proc.once('exit', finish);
+    try { proc.stdin.write('q\n'); } catch {}
+    setTimeout(() => {
+      if (!settled && !proc.killed) {
+        forced = true;
+        proc.kill();
+      }
+      finish(null);
+    }, 4000);
+  });
+  return recordingStopPromise;
+}
+
+registerTrustedHandle('start-source-recording', async (event, request) => {
+  assertPlainObject(request, 'Recording request');
+  assertBoundedString(request.sourceUrl, 'Recording source URL', MAX_URL_LENGTH);
+  assertHttpUrlText(request.sourceUrl, 'Recording source URL');
+  assertBoundedString(request.channelName, 'Channel name', 256);
+  if (request.relayId !== undefined) assertBoundedString(request.relayId, 'Playback relay id', 64, true);
+  if (recordingProcess || recordingStopPromise) return { ok: false, error: 'A recording is already active.' };
+  const directory = assertWritableDirectory(loadSettingsFromFile().recordingDirectory || DEFAULT_RECORDING_DIR);
+  const outputPath = createUniqueMediaPath(directory, request.channelName, '.mkv');
+  const relay = request.relayId ? playbackRelays.get(request.relayId) : null;
+  const recordingInputUrl = relay ? relay.url : request.sourceUrl;
+  const args = [
+    '-hide_banner', '-loglevel', 'warning', '-user_agent', 'VLC/3.0.18 LibVLC/3.0.18',
+    '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '4',
+    '-i', recordingInputUrl, '-map', '0:v:0?', '-map', '0:a:0?', '-c', 'copy', '-sn', '-dn', '-f', 'matroska', outputPath
+  ];
+  const proc = spawn(resolveFfmpegPath(), args, { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
+  recordingProcess = proc;
+  recordingRelayId = relay ? relay.id : null;
+  let errorText = '';
+  proc.stderr.on('data', chunk => { errorText = `${errorText}${chunk}`.slice(-4096); });
+  proc.once('error', error => {
+    if (recordingProcess === proc) recordingProcess = null;
+    recordingStopPromise = null;
+    const failedRelayId = recordingRelayId;
+    recordingRelayId = null;
+    if (failedRelayId) stopPlaybackRelay(failedRelayId);
+    emitRecordingState({ status: 'failed', error: error.message, path: outputPath });
+  });
+  proc.once('exit', code => {
+    if (recordingProcess === proc) recordingProcess = null;
+    const exitedRelayId = recordingRelayId;
+    recordingRelayId = null;
+    if (exitedRelayId) stopPlaybackRelay(exitedRelayId);
+    if (recordingState.status === 'finalizing') return;
+    if (code === 0) {
+      emitRecordingState({ status: 'completed', error: null });
+    } else {
+      emitRecordingState({ status: 'failed', error: errorText || `FFmpeg exited with code ${code}.` });
+    }
+  });
+  emitRecordingState({ status: 'recording', mode: 'source-mkv', path: outputPath, startedAtUtc: new Date().toISOString(), bytes: 0, error: null });
+  return { ok: true, state: recordingState };
+});
+
+registerTrustedHandle('stop-source-recording', () => stopSourceRecording());
+
+registerTrustedHandle('get-recording-state', () => emitRecordingState());
+
+function parseRawHttpHeaders(headerText) {
+  const lines = headerText.split(/\r?\n/);
+  const statusMatch = lines[0]?.match(/^HTTP\/\d\.\d\s+(\d+)/);
+  const statusCode = statusMatch ? Number(statusMatch[1]) : 0;
+  const headers = {};
+
+  for (const line of lines.slice(1)) {
+    const separatorIndex = line.indexOf(':');
+    if (separatorIndex < 0) continue;
+
+    const key = line.slice(0, separatorIndex).trim().toLowerCase();
+    const value = line.slice(separatorIndex + 1).trim();
+    if (!key) continue;
+
+    if (headers[key]) {
+      headers[key] = `${headers[key]}\n${value}`;
+    } else {
+      headers[key] = value;
+    }
+  }
+
+  return { statusCode, headers };
+}
+
+function firstHeaderValue(headers, name) {
+  return (headers[name] || '').split('\n')[0].trim();
+}
+
+function normalizeNetworkHostname(hostname) {
+  return hostname.startsWith('[') && hostname.endsWith(']')
+    ? hostname.slice(1, -1)
+    : hostname;
+}
+
+function isPrivateIpv4Address(address) {
+  const octets = address.split('.').map(Number);
+  if (octets.length !== 4 || octets.some(value => !Number.isInteger(value) || value < 0 || value > 255)) return true;
+  const [a, b] = octets;
+  return a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 0) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    a >= 224;
+}
+
+function mappedIpv4FromIpv6(address) {
+  const lower = address.toLowerCase();
+  if (!lower.startsWith('::ffff:')) return null;
+  const suffix = lower.slice(7);
+  if (suffix.includes('.')) return suffix;
+  const parts = suffix.split(':');
+  if (parts.length !== 2) return null;
+  const high = Number.parseInt(parts[0], 16);
+  const low = Number.parseInt(parts[1], 16);
+  if (!Number.isFinite(high) || !Number.isFinite(low)) return null;
+  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+}
+
+function isPrivateNetworkAddress(address) {
+  const normalized = address.split('%')[0].toLowerCase();
+  if (net.isIP(normalized) === 4) return isPrivateIpv4Address(normalized);
+  if (net.isIP(normalized) !== 6) return true;
+
+  const mappedIpv4 = mappedIpv4FromIpv6(normalized);
+  if (mappedIpv4) return isPrivateIpv4Address(mappedIpv4);
+  if (normalized === '::' || normalized === '::1') return true;
+
+  const firstHextet = Number.parseInt(normalized.split(':')[0] || '0', 16);
+  return (firstHextet & 0xfe00) === 0xfc00 ||
+    (firstHextet & 0xffc0) === 0xfe80 ||
+    (firstHextet & 0xff00) === 0xff00 ||
+    normalized.startsWith('2001:db8:');
+}
+
+function assertAllowedNetworkTarget(hostname, allowPrivateNetwork) {
+  const normalized = normalizeNetworkHostname(hostname);
+  if (!allowPrivateNetwork && net.isIP(normalized) && isPrivateNetworkAddress(normalized)) {
+    throw new Error('Private and local network destinations are blocked.');
+  }
+  return normalized;
+}
+
+async function resolveNetworkTarget(hostname, allowPrivateNetwork = false) {
+  const normalized = assertAllowedNetworkTarget(hostname, allowPrivateNetwork);
+  const addresses = await dns.promises.lookup(normalized, { all: true, verbatim: true });
+  if (addresses.length === 0) throw new Error('The destination host did not resolve.');
+  if (!allowPrivateNetwork && addresses.some(entry => isPrivateNetworkAddress(entry.address))) {
+    throw new Error('Private and local network destinations are blocked.');
+  }
+  return { hostname: normalized, ...addresses[0] };
+}
+
+function createGuardedLookup(allowPrivateNetwork) {
+  return (hostname, options, callback) => {
+    resolveNetworkTarget(hostname, allowPrivateNetwork)
+      .then(result => {
+        if (typeof options === 'object' && options?.all) {
+          callback(null, [{ address: result.address, family: result.family }]);
+          return;
+        }
+        callback(null, result.address, result.family);
+      })
+      .catch(callback);
+  };
+}
+
+function redactUrlForLogs(urlText) {
+  try {
+    const parsed = new URL(urlText);
+    return `${parsed.protocol}//${parsed.host}/…`;
+  } catch {
+    return '[redacted-url]';
+  }
+}
+
+function requestRawUrl(urlText, redirectCount = 0) {
+  return new Promise((resolve, reject) => {
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(urlText);
+    } catch {
+      reject(new Error('Invalid URL.'));
+      return;
+    }
+
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      reject(new Error('Unsupported URL protocol.'));
+      return;
+    }
+
+    const allowPrivateNetwork = false;
+    let networkHostname;
+    try {
+      networkHostname = assertAllowedNetworkTarget(parsedUrl.hostname, allowPrivateNetwork);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    const isHttps = parsedUrl.protocol === 'https:';
+    const port = Number(parsedUrl.port || (isHttps ? 443 : 80));
+    const requestPath = `${parsedUrl.pathname || '/'}${parsedUrl.search || ''}`;
+    const hostHeader = parsedUrl.port ? `${parsedUrl.hostname}:${parsedUrl.port}` : parsedUrl.hostname;
+    const connectionOptions = {
+      host: networkHostname,
+      port,
+      lookup: createGuardedLookup(allowPrivateNetwork)
+    };
+    const socket = isHttps
+      ? tls.connect({
+        ...connectionOptions,
+        servername: net.isIP(networkHostname) ? undefined : networkHostname
+      })
+      : net.createConnection(connectionOptions);
+
+    let headerBuffer = Buffer.alloc(0);
+    const bodyChunks = [];
+    let headersParsed = false;
+    let responseMeta = null;
+    let bodyBytes = 0;
+    let settled = false;
+
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      reject(error);
+    };
+
+    const sendRequest = () => {
+      socket.write(
+        `GET ${requestPath} HTTP/1.1\r\n` +
+        `Host: ${hostHeader}\r\n` +
+        `User-Agent: FreakyIPTV/1.0\r\n` +
+        `Accept: */*\r\n` +
+        `Connection: close\r\n\r\n`
+      );
+    };
+
+    const appendBody = (chunk) => {
+      bodyBytes += chunk.length;
+      if (bodyBytes > MAX_TEXT_DOWNLOAD_BYTES) {
+        fail(new Error('Downloaded response is too large.'));
+        return;
+      }
+      bodyChunks.push(chunk);
+    };
+
+    socket.setTimeout(60000);
+    socket.once(isHttps ? 'secureConnect' : 'connect', sendRequest);
+    socket.on('timeout', () => fail(new Error('Timed out downloading URL.')));
+    socket.on('error', (error) => fail(error));
+
+    socket.on('data', (chunk) => {
+      if (settled) return;
+
+      if (headersParsed) {
+        appendBody(chunk);
+        return;
+      }
+
+      headerBuffer = Buffer.concat([headerBuffer, chunk]);
+      const headerEnd = headerBuffer.indexOf('\r\n\r\n');
+      if (headerEnd < 0) {
+        if (headerBuffer.length > 64 * 1024) {
+          fail(new Error('Response headers are too large.'));
+        }
+        return;
+      }
+
+      const headerText = headerBuffer.subarray(0, headerEnd).toString('latin1');
+      responseMeta = parseRawHttpHeaders(headerText);
+      headersParsed = true;
+
+      const location = firstHeaderValue(responseMeta.headers, 'location');
+      if (responseMeta.statusCode >= 300 && responseMeta.statusCode < 400 && location) {
+        if (redirectCount >= MAX_REDIRECTS) {
+          fail(new Error('Too many redirects.'));
+          return;
+        }
+
+        settled = true;
+        socket.destroy();
+        resolve(requestRawUrl(new URL(location, parsedUrl).toString(), redirectCount + 1));
+        return;
+      }
+
+      const body = headerBuffer.subarray(headerEnd + 4);
+      if (body.length > 0) {
+        appendBody(body);
+      }
+    });
+
+    socket.on('end', () => {
+      if (settled) return;
+      settled = true;
+
+      if (!responseMeta) {
+        reject(new Error('No HTTP response received.'));
+        return;
+      }
+
+      resolve({
+        statusCode: responseMeta.statusCode,
+        headers: responseMeta.headers,
+        body: Buffer.concat(bodyChunks, bodyBytes),
+        finalUrl: urlText
+      });
+    });
+  });
+}
+
+function inflateBuffer(buffer, method) {
+  return new Promise((resolve, reject) => {
+    try {
+      method(buffer, { maxOutputLength: MAX_DECOMPRESSED_TEXT_BYTES }, (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result);
+        }
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+async function decodeResponseBody(response) {
+  const encoding = firstHeaderValue(response.headers, 'content-encoding').toLowerCase();
+  const looksGzipped = response.body.length >= 2 && response.body[0] === 0x1f && response.body[1] === 0x8b;
+
+  if (encoding.includes('br')) {
+    return inflateBuffer(response.body, zlib.brotliDecompress);
+  }
+
+  if (encoding.includes('gzip') || looksGzipped) {
+    return inflateBuffer(response.body, zlib.gunzip);
+  }
+
+  if (encoding.includes('deflate')) {
+    return inflateBuffer(response.body, zlib.inflate);
+  }
+
+  return response.body;
+}
+
+async function downloadUrlText(url) {
+  const response = await requestRawUrl(url);
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(`Failed to download URL. HTTP status: ${response.statusCode}`);
+  }
+
+  const decoded = await decodeResponseBody(response);
+  return decoded.toString('utf8');
+}
+
+registerTrustedHandle('download-url-text', async (event, url) => {
+  assertBoundedString(url, 'Download URL', MAX_URL_LENGTH);
+  return downloadUrlText(url);
+});
+
+let vlcProxyProcess = null;
+let upstreamRelayServer = null;
+let vlcOutputRelayServer = null;
+let ffmpegEncoderList = null;
+let proxyBytesDownloaded = 0;
+let playbackRelaySequence = 0;
+const playbackRelays = new Map();
+const playbackRelayBySourceUrl = new Map();
+const PLAYBACK_RELAY_IDLE_MS = 5000;
+const PLAYBACK_RELAY_REPLAY_BYTES = 8 * 1024 * 1024;
+
+function relayId() {
+  playbackRelaySequence += 1;
+  return `relay-${Date.now().toString(36)}-${playbackRelaySequence.toString(36)}`;
+}
+
+function closePlaybackRelay(relay) {
+  if (!relay || relay.closed) return;
+  relay.closed = true;
+  if (relay.url) unregisterTrustedLocalMediaUrl(relay.url);
+  if (relay.idleTimer) {
+    clearTimeout(relay.idleTimer);
+    relay.idleTimer = null;
+  }
+  for (const client of relay.clients) {
+    try {
+      if (!client.response.writableEnded) client.response.end();
+    } catch {}
+  }
+  relay.clients.clear();
+  if (relay.upstreamSocket) {
+    try { relay.upstreamSocket.destroy(); } catch {}
+    relay.upstreamSocket = null;
+  }
+  if (relay.server) {
+    try { relay.server.close(); } catch {}
+  }
+  playbackRelays.delete(relay.id);
+  if (playbackRelayBySourceUrl.get(relay.sourceUrl) === relay.id) {
+    playbackRelayBySourceUrl.delete(relay.sourceUrl);
+  }
+}
+
+function stopPlaybackRelay(id) {
+  const relay = playbackRelays.get(id);
+  if (!relay) return true;
+  if (recordingRelayId === id && recordingProcess) {
+    relay.playbackReleased = true;
+    return true;
+  }
+  closePlaybackRelay(relay);
+  return true;
+}
+
+function schedulePlaybackRelayIdleCheck(relay) {
+  if (relay.closed || relay.clients.size > 0 || recordingRelayId === relay.id) return;
+  if (relay.idleTimer) clearTimeout(relay.idleTimer);
+  relay.idleTimer = setTimeout(() => {
+    relay.idleTimer = null;
+    if (!relay.closed && relay.clients.size === 0 && recordingRelayId !== relay.id && relay.playbackReleased) {
+      closePlaybackRelay(relay);
+    } else if (!relay.closed && relay.clients.size === 0 && relay.upstreamSocket) {
+      try { relay.upstreamSocket.destroy(); } catch {}
+      relay.upstreamSocket = null;
+      relay.connecting = false;
+      relay.headersReady = false;
+      relay.headerBuffer = Buffer.alloc(0);
+    }
+  }, PLAYBACK_RELAY_IDLE_MS);
+}
+
+function appendPlaybackRelayReplay(relay, chunk) {
+  if (!chunk || chunk.length === 0) return;
+  relay.replayChunks.push(chunk);
+  relay.replayBytes += chunk.length;
+  while (relay.replayBytes > PLAYBACK_RELAY_REPLAY_BYTES && relay.replayChunks.length > 0) {
+    const removed = relay.replayChunks.shift();
+    relay.replayBytes -= removed.length;
+  }
+}
+
+function writePlaybackRelayReplay(relay, client) {
+  if (!client.needsReplay) return;
+  client.needsReplay = false;
+  for (const replayChunk of relay.replayChunks) {
+    if (client.closed || client.response.writableEnded) return;
+    client.response.write(replayChunk);
+  }
+}
+
+function sendPlaybackRelayHeaders(relay, client) {
+  if (client.closed || client.headersSent || !relay.headersReady) return;
+  writeCorsHeaders(client.response, {
+    statusCode: relay.statusCode >= 200 && relay.statusCode < 400 ? 200 : relay.statusCode,
+    headers: {
+      'Content-Type': relay.contentType || 'video/MP2T',
+      'Cache-Control': 'no-cache'
+    }
+  });
+  client.headersSent = true;
+  writePlaybackRelayReplay(relay, client);
+}
+
+function broadcastPlaybackRelayChunk(relay, chunk) {
+  if (relay.clients.size === 0) return;
+  let pendingDrains = 0;
+  const resumeIfReady = () => {
+    pendingDrains -= 1;
+    if (pendingDrains <= 0 && relay.upstreamSocket && !relay.upstreamSocket.destroyed) {
+      relay.upstreamSocket.resume();
+    }
+  };
+
+  for (const client of relay.clients) {
+    if (client.closed) continue;
+    sendPlaybackRelayHeaders(relay, client);
+    if (!client.headersSent || client.response.writableEnded) continue;
+    if (!client.response.write(chunk)) {
+      pendingDrains += 1;
+      client.response.once('drain', resumeIfReady);
+    }
+  }
+
+  if (pendingDrains > 0 && relay.upstreamSocket) {
+    relay.upstreamSocket.pause();
+  }
+}
+
+function endPlaybackRelayClients(relay) {
+  for (const client of relay.clients) {
+    try {
+      if (!client.response.writableEnded) client.response.end();
+    } catch {}
+  }
+  relay.clients.clear();
+  schedulePlaybackRelayIdleCheck(relay);
+}
+
+function startPlaybackRelayUpstream(relay, currentUrl = relay.sourceUrl, redirectCount = 0) {
+  if (relay.closed || relay.connecting || relay.upstreamSocket) return;
+  relay.connecting = true;
+  relay.headersReady = false;
+  relay.headerBuffer = Buffer.alloc(0);
+
+  let upstreamUrl;
+  try {
+    upstreamUrl = new URL(currentUrl);
+  } catch {
+    relay.lastError = 'Invalid upstream URL';
+    endPlaybackRelayClients(relay);
+    relay.connecting = false;
+    return;
+  }
+
+  if (upstreamUrl.protocol !== 'http:' && upstreamUrl.protocol !== 'https:') {
+    relay.lastError = 'Unsupported upstream URL protocol';
+    endPlaybackRelayClients(relay);
+    relay.connecting = false;
+    return;
+  }
+
+  const allowPrivateNetwork = false;
+  let networkHostname;
+  try {
+    networkHostname = assertAllowedNetworkTarget(upstreamUrl.hostname, allowPrivateNetwork);
+  } catch (error) {
+    relay.lastError = error.message;
+    endPlaybackRelayClients(relay);
+    relay.connecting = false;
+    return;
+  }
+
+  const isHttps = upstreamUrl.protocol === 'https:';
+  const port = Number(upstreamUrl.port || (isHttps ? 443 : 80));
+  const requestPath = `${upstreamUrl.pathname || '/'}${upstreamUrl.search || ''}`;
+  const hostHeader = upstreamUrl.port ? `${upstreamUrl.hostname}:${upstreamUrl.port}` : upstreamUrl.hostname;
+  const connectionOptions = {
+    host: networkHostname,
+    port,
+    lookup: createGuardedLookup(allowPrivateNetwork)
+  };
+  const upstreamSocket = isHttps
+    ? tls.connect({
+      ...connectionOptions,
+      servername: net.isIP(networkHostname) ? undefined : networkHostname
+    })
+    : net.createConnection(connectionOptions);
+
+  relay.upstreamSocket = upstreamSocket;
+
+  const sendUpstreamRequest = () => {
+    upstreamSocket.write(
+      `GET ${requestPath} HTTP/1.1\r\n` +
+      `Host: ${hostHeader}\r\n` +
+      `User-Agent: VLC/3.0.18 LibVLC/3.0.18\r\n` +
+      `Connection: close\r\n\r\n`
+    );
+  };
+
+  upstreamSocket.once(isHttps ? 'secureConnect' : 'connect', sendUpstreamRequest);
+
+  upstreamSocket.on('data', (chunk) => {
+    relay.bytesDownloaded += chunk.length;
+    proxyBytesDownloaded = relay.bytesDownloaded;
+
+    if (relay.headersReady) {
+      appendPlaybackRelayReplay(relay, chunk);
+      broadcastPlaybackRelayChunk(relay, chunk);
+      return;
+    }
+
+    relay.headerBuffer = Buffer.concat([relay.headerBuffer, chunk]);
+    const headerEnd = relay.headerBuffer.indexOf('\r\n\r\n');
+    if (headerEnd < 0) {
+      if (relay.headerBuffer.length > 64 * 1024) {
+        upstreamSocket.destroy(new Error('Upstream response headers are too large.'));
+      }
+      return;
+    }
+
+    const headerText = relay.headerBuffer.subarray(0, headerEnd).toString('latin1');
+    const responseMeta = parseRawHttpHeaders(headerText);
+    const location = firstHeaderValue(responseMeta.headers, 'location');
+    if (responseMeta.statusCode >= 300 && responseMeta.statusCode < 400 && location) {
+      if (redirectCount >= MAX_REDIRECTS) {
+        relay.lastError = 'Too many upstream redirects';
+        endPlaybackRelayClients(relay);
+        return;
+      }
+
+      relay.upstreamSocket = null;
+      relay.connecting = false;
+      upstreamSocket.destroy();
+      startPlaybackRelayUpstream(relay, new URL(location, upstreamUrl).toString(), redirectCount + 1);
+      return;
+    }
+
+    relay.statusCode = responseMeta.statusCode || 502;
+    relay.contentType = firstHeaderValue(responseMeta.headers, 'content-type') || 'video/MP2T';
+    relay.headersReady = true;
+    relay.connecting = false;
+
+    const body = relay.headerBuffer.subarray(headerEnd + 4);
+    relay.headerBuffer = Buffer.alloc(0);
+    if (body.length > 0) {
+      appendPlaybackRelayReplay(relay, body);
+      broadcastPlaybackRelayChunk(relay, body);
+    }
+  });
+
+  upstreamSocket.on('error', (err) => {
+    relay.lastError = err.message || String(err);
+    console.error('Playback relay upstream failed:', relay.lastError);
+    relay.upstreamSocket = null;
+    relay.connecting = false;
+    relay.headersReady = false;
+    relay.headerBuffer = Buffer.alloc(0);
+    endPlaybackRelayClients(relay);
+  });
+
+  upstreamSocket.on('end', () => {
+    relay.upstreamSocket = null;
+    relay.connecting = false;
+    relay.headersReady = false;
+    relay.headerBuffer = Buffer.alloc(0);
+    endPlaybackRelayClients(relay);
+  });
+}
+
+function startPlaybackRelayServer(sourceUrl) {
+  const existingId = playbackRelayBySourceUrl.get(sourceUrl);
+  const existing = existingId ? playbackRelays.get(existingId) : null;
+  if (existing && !existing.closed) return Promise.resolve(existing);
+
+  const relay = {
+    id: relayId(),
+    sourceUrl,
+    url: null,
+    server: null,
+    clients: new Set(),
+    upstreamSocket: null,
+    connecting: false,
+    headersReady: false,
+    headerBuffer: Buffer.alloc(0),
+    statusCode: 200,
+    contentType: 'video/MP2T',
+    bytesDownloaded: 0,
+    replayChunks: [],
+    replayBytes: 0,
+    lastError: null,
+    idleTimer: null,
+    playbackReleased: false,
+    closed: false
+  };
+
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((clientReq, clientRes) => {
+      if (clientReq.method === 'OPTIONS') {
+        writeCorsHeaders(clientRes, { statusCode: 204 });
+        clientRes.end();
+        return;
+      }
+
+      if (clientReq.method !== 'GET') {
+        writeCorsHeaders(clientRes, { statusCode: 405 });
+        clientRes.end('Method not allowed');
+        return;
+      }
+
+      if (relay.idleTimer) {
+        clearTimeout(relay.idleTimer);
+        relay.idleTimer = null;
+      }
+
+      const client = { response: clientRes, headersSent: false, closed: false, needsReplay: relay.headersReady };
+      relay.clients.add(client);
+      sendPlaybackRelayHeaders(relay, client);
+      startPlaybackRelayUpstream(relay);
+
+      clientRes.once('close', () => {
+        client.closed = true;
+        relay.clients.delete(client);
+        schedulePlaybackRelayIdleCheck(relay);
+      });
+    });
+
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (typeof address !== 'object' || !address) {
+        server.close();
+        reject(new Error('Could not start playback relay.'));
+        return;
+      }
+      relay.server = server;
+      relay.url = `http://127.0.0.1:${address.port}/source`;
+      registerTrustedLocalMediaUrl(relay.url);
+      playbackRelays.set(relay.id, relay);
+      playbackRelayBySourceUrl.set(sourceUrl, relay.id);
+      resolve(relay);
+    });
+  });
+}
+
+function getFfmpegEncoderList() {
+  if (ffmpegEncoderList !== null) {
+    return ffmpegEncoderList;
+  }
+
+  try {
+    const result = spawnSync('ffmpeg', ['-hide_banner', '-encoders'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 3000
+    });
+    ffmpegEncoderList = `${result.stdout || ''}\n${result.stderr || ''}`;
+  } catch (e) {
+    console.warn('Failed to detect FFmpeg encoders:', e);
+    ffmpegEncoderList = '';
+  }
+
+  return ffmpegEncoderList;
+}
+
+function hasFfmpegEncoder(name) {
+  return new RegExp(`\\b${name}\\b`).test(getFfmpegEncoderList());
+}
+
+function getPreferredAacEncoder() {
+  return hasFfmpegEncoder('aac_mf') ? 'aac_mf' : 'aac';
+}
+
+function findLibVlcProxyHelperPath() {
+  const candidates = [
+    getUnpackedResourcePath(path.join('libvlc-proxy-runtime', 'LibVlcProxyHelper.exe')),
+    path.join(__dirname, 'libvlc-proxy-helper', 'bin', 'Release', 'net8.0-windows10.0.17763.0', 'win-x64', 'publish', 'LibVlcProxyHelper.exe'),
+    path.join(__dirname, 'libvlc-proxy-helper', 'bin', 'Release', 'net8.0-windows10.0.17763.0', 'LibVlcProxyHelper.exe'),
+    path.join(__dirname, 'libvlc-proxy-helper', 'bin', 'Debug', 'net8.0-windows10.0.17763.0', 'LibVlcProxyHelper.exe')
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function stopVlcProxyProcess() {
+  if (vlcOutputRelayServer) {
+    const server = vlcOutputRelayServer;
+    vlcOutputRelayServer = null;
+    if (server.freakyIptvTrustedUrl) unregisterTrustedLocalMediaUrl(server.freakyIptvTrustedUrl);
+    try {
+      server.close();
+    } catch (e) {
+      console.warn('Failed to stop VLC output relay:', e);
+    }
+  }
+
+  if (upstreamRelayServer) {
+    const server = upstreamRelayServer;
+    upstreamRelayServer = null;
+    if (server.freakyIptvTrustedUrl) unregisterTrustedLocalMediaUrl(server.freakyIptvTrustedUrl);
+    try {
+      server.close();
+    } catch (e) {
+      console.warn('Failed to stop upstream stream relay:', e);
+    }
+  }
+
+  if (!vlcProxyProcess) return;
+
+  const proc = vlcProxyProcess;
+  vlcProxyProcess = null;
+
+  try {
+    if (!proc.killed) {
+      proc.kill();
+    }
+  } catch (e) {
+    console.warn('Failed to stop VLC proxy:', e);
+  }
+}
+
+function startUpstreamRelay(sourceUrl) {
+  proxyBytesDownloaded = 0;
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((clientReq, clientRes) => {
+      const pipeUrl = (currentUrl, redirectCount = 0) => {
+        let upstreamUrl;
+        try {
+          upstreamUrl = new URL(currentUrl);
+        } catch (e) {
+          clientRes.writeHead(500);
+          clientRes.end('Invalid upstream URL');
+          return;
+        }
+
+        if (upstreamUrl.protocol !== 'http:' && upstreamUrl.protocol !== 'https:') {
+          clientRes.writeHead(502);
+          clientRes.end('Unsupported upstream URL protocol');
+          return;
+        }
+
+        const allowPrivateNetwork = false;
+        let networkHostname;
+        try {
+          networkHostname = assertAllowedNetworkTarget(upstreamUrl.hostname, allowPrivateNetwork);
+        } catch (error) {
+          clientRes.writeHead(502);
+          clientRes.end(error.message);
+          return;
+        }
+
+        const isHttps = upstreamUrl.protocol === 'https:';
+        const port = Number(upstreamUrl.port || (isHttps ? 443 : 80));
+        const requestPath = `${upstreamUrl.pathname || '/'}${upstreamUrl.search || ''}`;
+        const hostHeader = upstreamUrl.port ? `${upstreamUrl.hostname}:${upstreamUrl.port}` : upstreamUrl.hostname;
+        const connectionOptions = {
+          host: networkHostname,
+          port,
+          lookup: createGuardedLookup(allowPrivateNetwork)
+        };
+        const upstreamSocket = isHttps
+          ? tls.connect({
+            ...connectionOptions,
+            servername: net.isIP(networkHostname) ? undefined : networkHostname
+          })
+          : net.createConnection(connectionOptions);
+
+        let headerBuffer = Buffer.alloc(0);
+        let headersSent = false;
+
+        const closeUpstream = () => {
+          upstreamSocket.destroy();
+        };
+
+        const sendUpstreamRequest = () => {
+          upstreamSocket.write(
+            `GET ${requestPath} HTTP/1.1\r\n` +
+            `Host: ${hostHeader}\r\n` +
+            `User-Agent: VLC/3.0.18 LibVLC/3.0.18\r\n` +
+            `Connection: close\r\n\r\n`
+          );
+        };
+
+        clientRes.once('close', closeUpstream);
+        upstreamSocket.once(isHttps ? 'secureConnect' : 'connect', sendUpstreamRequest);
+
+        upstreamSocket.on('data', (chunk) => {
+          proxyBytesDownloaded += chunk.length;
+          if (headersSent) {
+            if (!clientRes.write(chunk)) {
+              upstreamSocket.pause();
+              clientRes.once('drain', () => upstreamSocket.resume());
+            }
+            return;
+          }
+
+          headerBuffer = Buffer.concat([headerBuffer, chunk]);
+          const headerEnd = headerBuffer.indexOf('\r\n\r\n');
+          if (headerEnd < 0) {
+            if (headerBuffer.length > 64 * 1024) {
+              upstreamSocket.destroy(new Error('Upstream response headers are too large.'));
+            }
+            return;
+          }
+
+          const headerText = headerBuffer.subarray(0, headerEnd).toString('latin1');
+          const responseMeta = parseRawHttpHeaders(headerText);
+          const location = firstHeaderValue(responseMeta.headers, 'location');
+          if (responseMeta.statusCode >= 300 && responseMeta.statusCode < 400 && location) {
+            if (redirectCount >= MAX_REDIRECTS) {
+              clientRes.writeHead(502);
+              clientRes.end('Too many upstream redirects');
+              return;
+            }
+
+            clientRes.removeListener('close', closeUpstream);
+            upstreamSocket.destroy();
+            pipeUrl(new URL(location, upstreamUrl).toString(), redirectCount + 1);
+            return;
+          }
+
+          headersSent = true;
+          clientRes.writeHead(responseMeta.statusCode >= 200 && responseMeta.statusCode < 400 ? 200 : responseMeta.statusCode, {
+            'Content-Type': 'video/MP2T'
+          });
+
+          const body = headerBuffer.subarray(headerEnd + 4);
+          if (body.length > 0) {
+            if (!clientRes.write(body)) {
+              upstreamSocket.pause();
+              clientRes.once('drain', () => upstreamSocket.resume());
+            }
+          }
+        });
+
+        upstreamSocket.on('error', (err) => {
+          console.error('Upstream relay failed:', err.message || err);
+          clientRes.removeListener('close', closeUpstream);
+          if (!clientRes.headersSent) {
+            clientRes.writeHead(502);
+          }
+          clientRes.end();
+        });
+
+        upstreamSocket.on('end', () => {
+          clientRes.removeListener('close', closeUpstream);
+          clientRes.end();
+        });
+      };
+
+      pipeUrl(sourceUrl);
+    });
+
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (typeof address !== 'object' || !address) {
+        server.close();
+        reject(new Error('Could not start upstream stream relay.'));
+        return;
+      }
+
+      upstreamRelayServer = server;
+      const relayUrl = `http://127.0.0.1:${address.port}/source`;
+      server.freakyIptvTrustedUrl = relayUrl;
+      registerTrustedLocalMediaUrl(relayUrl);
+      resolve(relayUrl);
+    });
+  });
+}
+
+function writeCorsHeaders(response, extraHeaders = {}) {
+  response.writeHead(extraHeaders.statusCode || 200, {
+    ...extraHeaders.headers,
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': '*',
+    'Access-Control-Expose-Headers': '*'
+  });
+}
+
+function startVlcOutputRelay(vlcOutputUrl) {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((clientReq, clientRes) => {
+      if (clientReq.method === 'OPTIONS') {
+        writeCorsHeaders(clientRes, { statusCode: 204 });
+        clientRes.end();
+        return;
+      }
+
+      if (clientReq.method !== 'GET') {
+        writeCorsHeaders(clientRes, { statusCode: 405 });
+        clientRes.end('Method not allowed');
+        return;
+      }
+
+      const upstreamReq = http.get(vlcOutputUrl, {
+        headers: {
+          'User-Agent': 'FreakyIPTV/1.0'
+        }
+      }, (upstreamRes) => {
+        writeCorsHeaders(clientRes, {
+          statusCode: upstreamRes.statusCode || 200,
+          headers: {
+            'Content-Type': upstreamRes.headers['content-type'] || 'video/MP2T',
+            'Cache-Control': 'no-cache'
+          }
+        });
+
+        upstreamRes.pipe(clientRes);
+      });
+
+      upstreamReq.on('error', (err) => {
+        console.error('VLC output relay failed:', err.message || err);
+        if (!clientRes.headersSent) {
+          writeCorsHeaders(clientRes, { statusCode: 502 });
+        }
+        clientRes.end();
+      });
+
+      clientRes.on('close', () => {
+        upstreamReq.destroy();
+      });
+    });
+
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (typeof address !== 'object' || !address) {
+        server.close();
+        reject(new Error('Could not start VLC output relay.'));
+        return;
+      }
+
+      vlcOutputRelayServer = server;
+      const relayUrl = `http://127.0.0.1:${address.port}/stream`;
+      server.freakyIptvTrustedUrl = relayUrl;
+      registerTrustedLocalMediaUrl(relayUrl);
+      resolve(relayUrl);
+    });
+  });
+}
+
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : null;
+      server.close(() => {
+        if (port) {
+          resolve(port);
+        } else {
+          reject(new Error('Could not allocate a local proxy port.'));
+        }
+      });
+    });
+  });
+}
+
+function waitForTcpPort(port, timeoutMs = 7000) {
+  const deadline = Date.now() + timeoutMs;
+
+  return new Promise((resolve, reject) => {
+    const tryConnect = () => {
+      if (!vlcProxyProcess || vlcProxyProcess.exitCode !== null) {
+        reject(new Error('VLC proxy exited before opening its HTTP endpoint.'));
+        return;
+      }
+
+      const socket = new net.Socket();
+      let settled = false;
+
+      const retry = () => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+
+        if (Date.now() >= deadline) {
+          reject(new Error(`Timed out waiting for VLC proxy on port ${port}.`));
+          return;
+        }
+
+        setTimeout(tryConnect, 250);
+      };
+
+      socket.setTimeout(500);
+      socket.once('connect', () => {
+        if (settled) return;
+        settled = true;
+        socket.end();
+        resolve();
+      });
+      socket.once('timeout', retry);
+      socket.once('error', retry);
+      socket.connect(port, '127.0.0.1');
+    };
+
+    tryConnect();
+  });
+}
+
+registerTrustedHandle('start-playback-relay', async (event, url) => {
+  try {
+    assertBoundedString(url, 'Stream URL', MAX_URL_LENGTH);
+    assertHttpUrlText(url, 'Stream URL');
+    const parsed = new URL(url);
+    assertAllowedNetworkTarget(parsed.hostname, false);
+    const relay = await startPlaybackRelayServer(url);
+    relay.playbackReleased = false;
+    return { ok: true, relayId: relay.id, url: relay.url };
+  } catch (e) {
+    console.error('Failed to start playback relay:', e);
+    return {
+      ok: false,
+      errorCode: 'network',
+      error: 'The live stream relay could not start.'
+    };
+  }
+});
+
+registerTrustedHandle('stop-playback-relay', (event, id) => {
+  assertBoundedString(id, 'Playback relay id', 64, true);
+  if (!id) return true;
+  return stopPlaybackRelay(id);
+});
+
+registerTrustedHandle('get-playback-relay-traffic', (event, id) => {
+  assertBoundedString(id, 'Playback relay id', 64, true);
+  if (!id) return 0;
+  return playbackRelays.get(id)?.bytesDownloaded || 0;
+});
+
+registerTrustedHandle('start-vlc-proxy', async (event, url, options = {}) => {
+  stopVlcProxyProcess();
+  
+  try {
+    assertBoundedString(url, 'Stream URL', MAX_URL_LENGTH);
+    assertPlainObject(options, 'Proxy options');
+    if (options.mode !== undefined && options.mode !== 'copy' && options.mode !== 'hardware') {
+      throw new TypeError('Proxy mode must be copy or hardware.');
+    }
+    if (options.relayId !== undefined) assertBoundedString(options.relayId, 'Playback relay id', 64, true);
+    const sharedRelay = options.relayId ? playbackRelays.get(options.relayId) : null;
+    if (options.relayId && !sharedRelay) {
+      throw new Error('The requested playback relay is no longer active.');
+    }
+    const relayUrl = sharedRelay ? sharedRelay.url : await startUpstreamRelay(url);
+    const { spawn } = require('child_process');
+    const requestedMode = options && options.mode === 'hardware' ? 'hardware-d3d11' : 'copy';
+    const audioEncoder = getPreferredAacEncoder();
+
+    vlcOutputRelayServer = http.createServer((req, res) => {
+      if (req.method === 'OPTIONS') {
+        writeCorsHeaders(res, { statusCode: 204 });
+        res.end();
+        return;
+      }
+
+      console.log(`[FFmpeg proxy] Starting low CPU relay for ${redactUrlForLogs(url)}`);
+
+      let responseSent = false;
+      let activeProcess = null;
+      let bytesSent = 0;
+      let nextProgressLogBytes = 25 * 1024 * 1024;
+
+      const runFfmpeg = (mode) => {
+        if (req.socket.destroyed) {
+          console.log('[FFmpeg proxy] Request socket already destroyed, aborting spawn');
+          return;
+        }
+
+        const modes = {
+          copy: {
+            label: `copy-video-${audioEncoder}`,
+            args: [
+              '-map', '0:v:0?', '-map', '0:a:0?',
+              '-c:v', 'copy',
+              '-c:a', audioEncoder,
+              '-b:a', '192k'
+            ]
+          },
+          'hardware-d3d11': {
+            label: `h264_mf-d3d11-high-${audioEncoder}`,
+            inputArgs: ['-hwaccel', 'd3d11va'],
+            args: [
+              '-map', '0:v:0?', '-map', '0:a:0?',
+              '-pix_fmt', 'nv12',
+              '-c:v', 'h264_mf',
+              '-hw_encoding', '1',
+              '-scenario', 'live_streaming',
+              '-rate_control', 'pc_vbr',
+              '-quality', '100',
+              '-b:v', '24000k',
+              '-maxrate', '36000k',
+              '-bufsize', '72000k',
+              '-c:a', audioEncoder,
+              '-b:a', '192k'
+            ]
+          },
+          hardware: {
+            label: `h264_mf-high-${audioEncoder}`,
+            args: [
+              '-map', '0:v:0?', '-map', '0:a:0?',
+              '-pix_fmt', 'nv12',
+              '-c:v', 'h264_mf',
+              '-hw_encoding', '1',
+              '-scenario', 'live_streaming',
+              '-rate_control', 'pc_vbr',
+              '-quality', '100',
+              '-b:v', '24000k',
+              '-maxrate', '36000k',
+              '-bufsize', '72000k',
+              '-c:a', audioEncoder,
+              '-b:a', '192k'
+            ]
+          },
+          software: {
+            label: `libx264-ultrafast-${audioEncoder}`,
+            args: [
+              '-map', '0:v:0?', '-map', '0:a:0?',
+              '-c:v', 'libx264',
+              '-preset', 'ultrafast',
+              '-tune', 'zerolatency',
+              '-crf', '18',
+              '-pix_fmt', 'yuv420p',
+              '-c:a', audioEncoder,
+              '-b:a', '192k'
+            ]
+          }
+        };
+        const selectedMode = modes[mode] || modes.copy;
+
+        console.log(`[FFmpeg proxy] Spawning FFmpeg mode: ${selectedMode.label}`);
+
+        const proc = spawn(resolveFfmpegPath(), [
+          '-hide_banner',
+          '-loglevel', 'warning',
+          // +genpts: regenerate PTS for better sync; discardcorrupt removed to
+          // avoid dropping valid frames from live IPTV streams with minor TS issues
+          '-fflags', '+genpts',
+          // 2 MB probe gives FFmpeg enough data to correctly detect Full HD
+          // stream parameters (bitrate, codec profile, colour space) without
+          // slowing down startup — copy mode starts output as soon as the first
+          // keyframe arrives regardless of this value
+          '-analyzeduration', '1000000',
+          '-probesize', '2097152',
+          '-user_agent', 'VLC/3.0.18 LibVLC/3.0.18',
+          '-reconnect', '1',
+          '-reconnect_at_eof', '1',
+          '-reconnect_streamed', '1',
+          '-reconnect_delay_max', '4',
+          '-rw_timeout', '10000000',
+          ...(selectedMode.inputArgs || []),
+          '-i', relayUrl,
+          ...selectedMode.args,
+          '-sn',
+          '-dn',
+          '-f', 'mpegts',
+          '-mpegts_flags', '+resend_headers',
+          '-flush_packets', '1',
+          'pipe:1'
+        ], { windowsHide: true });
+
+        activeProcess = proc;
+        vlcProxyProcess = proc;
+
+        proc.stdout.on('data', (chunk) => {
+          if (!responseSent) {
+            writeCorsHeaders(res, {
+              statusCode: 200,
+              headers: {
+                'Content-Type': 'video/MP2T',
+                'Cache-Control': 'no-cache'
+              }
+            });
+            responseSent = true;
+          }
+          if (!res.write(chunk)) {
+            proc.stdout.pause();
+            res.once('drain', () => proc.stdout.resume());
+          }
+          bytesSent += chunk.length;
+          if (bytesSent >= nextProgressLogBytes) {
+            console.log(`[FFmpeg proxy] Sent ${bytesSent} bytes to client`);
+            nextProgressLogBytes += 25 * 1024 * 1024;
+          }
+        });
+
+        proc.stderr.on('data', (data) => {
+          const msg = data.toString().trim();
+          if (msg) console.log(`[FFmpeg] ${msg}`);
+        });
+
+        proc.on('exit', (code) => {
+          console.log(`[FFmpeg proxy] Process (${selectedMode.label}) exited with code ${code}`);
+          if (!responseSent && code !== 0 && code !== null && !req.socket.destroyed) {
+            if (mode === 'copy') {
+              console.warn('[FFmpeg proxy] Copy-video relay failed before output, falling back to GPU encode...');
+              runFfmpeg('hardware-d3d11');
+              return;
+            }
+            if (mode === 'hardware-d3d11') {
+              console.warn('[FFmpeg proxy] D3D11 hardware path failed before output, retrying Media Foundation hardware encode without hardware decode...');
+              runFfmpeg('hardware');
+              return;
+            }
+            if (mode === 'hardware') {
+              console.warn('[FFmpeg proxy] All hardware encode paths failed before output, falling back to software encode...');
+              runFfmpeg('software');
+              return;
+            }
+          }
+
+          if (!res.writableEnded) {
+            res.end();
+          }
+        });
+
+        proc.on('error', (err) => {
+          console.error(`[FFmpeg proxy] Process (${selectedMode.label}) error:`, err);
+          if (!responseSent && !req.socket.destroyed) {
+            if (mode === 'copy') {
+              console.warn('[FFmpeg proxy] Copy-video relay error, falling back to GPU encode...');
+              runFfmpeg('hardware-d3d11');
+              return;
+            }
+            if (mode === 'hardware-d3d11') {
+              console.warn('[FFmpeg proxy] D3D11 hardware path error, retrying Media Foundation hardware encode without hardware decode...');
+              runFfmpeg('hardware');
+              return;
+            }
+            if (mode === 'hardware') {
+              console.warn('[FFmpeg proxy] All hardware encode paths failed, falling back to software encode...');
+              runFfmpeg('software');
+              return;
+            }
+          }
+
+          if (!res.writableEnded) {
+            res.end();
+          }
+        });
+      };
+
+      req.on('close', () => {
+        console.log(`[FFmpeg proxy] Client closed connection, killing active ffmpeg process`);
+        if (activeProcess) {
+          activeProcess.kill();
+        }
+      });
+
+      runFfmpeg(requestedMode);
+    });
+
+    return new Promise((resolve, reject) => {
+      vlcOutputRelayServer.on('error', reject);
+      vlcOutputRelayServer.listen(0, '127.0.0.1', () => {
+        const address = vlcOutputRelayServer.address();
+        const trustedUrl = `http://127.0.0.1:${address.port}/stream`;
+        vlcOutputRelayServer.freakyIptvTrustedUrl = trustedUrl;
+        registerTrustedLocalMediaUrl(trustedUrl);
+        console.log(`[FFmpeg proxy] Relay server listening on local port: ${address.port}`);
+        resolve({ ok: true, url: trustedUrl });
+      });
+    });
+  } catch (e) {
+    console.error('Failed to start FFmpeg proxy:', e);
+    stopVlcProxyProcess();
+    return {
+      ok: false,
+      errorCode: /ffmpeg/i.test(String(e?.message || e)) ? 'proxy' : 'network',
+      error: 'The compatibility video engine could not start.'
+    };
+  }
+});
+
+registerTrustedHandle('stop-vlc-proxy', () => {
+  stopVlcProxyProcess();
+  return true;
+});
+
+registerTrustedHandle('get-proxy-traffic', () => {
+  return proxyBytesDownloaded;
+});
+
+let mainWindow = null;
+let keepPlaybackAwakeBlockerId = null;
+let mainWindowCloseConfirmed = false;
+let mainWindowCloseTimer = null;
+
+registerTrustedOn('app-close-ready', () => {
+  mainWindowCloseConfirmed = true;
+  if (mainWindowCloseTimer !== null) {
+    clearTimeout(mainWindowCloseTimer);
+    mainWindowCloseTimer = null;
+  }
+  mainWindow.close();
+});
+
+function setPlaybackAwake(active) {
+  if (active) {
+    if (keepPlaybackAwakeBlockerId === null || !powerSaveBlocker.isStarted(keepPlaybackAwakeBlockerId)) {
+      keepPlaybackAwakeBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+    }
+    return true;
+  }
+
+  if (keepPlaybackAwakeBlockerId !== null && powerSaveBlocker.isStarted(keepPlaybackAwakeBlockerId)) {
+    powerSaveBlocker.stop(keepPlaybackAwakeBlockerId);
+  }
+  keepPlaybackAwakeBlockerId = null;
+  return true;
+}
+
+registerTrustedHandle('set-playback-active', (event, active) => {
+  if (typeof active !== 'boolean') throw new TypeError('Playback state must be a boolean.');
+  return setPlaybackAwake(active);
+});
+
+registerTrustedHandle('set-window-fullscreen', (event, active) => {
+  if (typeof active !== 'boolean') throw new TypeError('Fullscreen state must be a boolean.');
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  mainWindow.setFullScreen(active);
+  return active;
+});
+
+registerTrustedHandle('focus-app-window', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+  mainWindow.moveTop();
+  return true;
+});
+
+function createWindow() {
+  Menu.setApplicationMenu(null);
+
+  const iconPath = app.isPackaged
+    ? path.join(__dirname, 'dist', 'cat_icon.png')
+    : path.join(__dirname, 'public', 'cat_icon.png');
+
+  mainWindow = new BrowserWindow({
+    width: 1280,
+    height: 720,
+    minWidth: 1024,
+    minHeight: 600,
+    title: 'Freaky IPTV',
+    icon: iconPath,
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      webviewTag: false,
+      autoplayPolicy: 'no-user-gesture-required',
+      backgroundThrottling: true
+    }
+  });
+
+  mainWindow.setMenu(null);
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.setBackgroundColor('#101721');
+
+  mainWindow.on('enter-full-screen', () => {
+    mainWindow?.webContents.send('window-fullscreen-changed', true);
+  });
+  mainWindow.on('leave-full-screen', () => {
+    mainWindow?.webContents.send('window-fullscreen-changed', false);
+  });
+
+  if (!app.isPackaged) {
+    mainWindow.webContents.on('console-message', (details) => {
+      console.log(`[Renderer] [${details.level}] ${details.message}`);
+    });
+  }
+
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  for (const navigationEvent of ['will-navigate', 'will-redirect']) {
+    mainWindow.webContents.on(navigationEvent, (event, targetUrl) => {
+      if (!isTrustedRendererUrl(targetUrl)) event.preventDefault();
+    });
+  }
+
+  if (!app.isPackaged && process.env.FREAKYIPTV_E2E !== '1') {
+    mainWindow.loadURL('http://localhost:5173');
+  } else {
+    mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'));
+  }
+
+  mainWindow.on('close', (event) => {
+    if (mainWindowCloseConfirmed || !mainWindow || mainWindow.isDestroyed()) return;
+
+    event.preventDefault();
+    mainWindow.webContents.send('app-before-close');
+
+    if (mainWindowCloseTimer === null) {
+      mainWindowCloseTimer = setTimeout(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        mainWindowCloseConfirmed = true;
+        mainWindow.close();
+      }, 3000);
+    }
+  });
+
+  mainWindow.on('closed', () => {
+    setPlaybackAwake(false);
+    if (mainWindowCloseTimer !== null) {
+      clearTimeout(mainWindowCloseTimer);
+      mainWindowCloseTimer = null;
+    }
+    mainWindowCloseConfirmed = false;
+    mainWindow = null;
+  });
+}
+
+app.whenReady().then(() => {
+  const { session } = require('electron');
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  session.defaultSession.setPermissionCheckHandler(() => false);
+  session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
+    shouldBlockRendererNetworkRequest(details)
+      .then(cancel => callback({ cancel }))
+      .catch((error) => {
+        console.warn('Failed to evaluate renderer network request:', error.message || error);
+        callback({ cancel: true });
+      });
+  });
+
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const url = details.url.toLowerCase();
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      details.requestHeaders['User-Agent'] = 'VLC/3.0.18 LibVLC/3.0.18';
+      delete details.requestHeaders['Origin'];
+      delete details.requestHeaders['Referer'];
+      
+      // Delete browser-specific headers to match native VLC player exactly
+      delete details.requestHeaders['sec-ch-ua'];
+      delete details.requestHeaders['sec-ch-ua-mobile'];
+      delete details.requestHeaders['sec-ch-ua-platform'];
+      delete details.requestHeaders['sec-fetch-dest'];
+      delete details.requestHeaders['sec-fetch-mode'];
+      delete details.requestHeaders['sec-fetch-site'];
+      delete details.requestHeaders['sec-fetch-user'];
+      delete details.requestHeaders['upgrade-insecure-requests'];
+      delete details.requestHeaders['accept-language'];
+    }
+    callback({ cancel: false, requestHeaders: details.requestHeaders });
+  });
+
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    let responseHeaders = details.responseHeaders;
+
+    try {
+      const url = new URL(details.url);
+      const isLocalHttpProxy =
+        (url.protocol === 'http:' || url.protocol === 'https:') &&
+        (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1');
+
+      const isTrustedMediaResponse =
+        mainWindow &&
+        !mainWindow.isDestroyed() &&
+        details.webContentsId === mainWindow.webContents.id &&
+        (details.resourceType === 'xhr' || details.resourceType === 'media');
+
+      const isTrustedRendererDocument =
+        mainWindow &&
+        !mainWindow.isDestroyed() &&
+        details.webContentsId === mainWindow.webContents.id &&
+        details.resourceType === 'mainFrame' &&
+        isTrustedRendererUrl(details.url);
+
+      if (isLocalHttpProxy || isTrustedMediaResponse) {
+        responseHeaders = {
+          ...responseHeaders,
+          'Access-Control-Allow-Origin': ['*'],
+          'Access-Control-Allow-Methods': ['GET, OPTIONS'],
+          'Access-Control-Allow-Headers': ['*']
+        };
+      }
+      if (isTrustedRendererDocument) {
+        responseHeaders = {
+          ...responseHeaders,
+          'Content-Security-Policy': ["frame-ancestors 'none'"]
+        };
+      }
+    } catch {
+      // Ignore URLs Electron cannot parse and leave their headers unchanged.
+    }
+
+    callback({ responseHeaders });
+  });
+
+  createWindow();
+
+  // Initialize Discord RPC settings
+  const settings = loadSettingsFromFile();
+  applyDiscordSettings(settings.discordRpcEnabled, settings.discordShowChannel, settings.discordClientId);
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('window-all-closed', () => {
+  stopVlcProxyProcess();
+  if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => {
+  cleanupDiscordSocket();
+  setPlaybackAwake(false);
+  stopVlcProxyProcess();
+});
+
+// --- Discord Rich Presence Integration ---
+
+let discordAppIconUrl = 'https://cdn.discordapp.com/app-icons/1514411481259577364/a9d1b783394865061c51ccf5b9e56338.png';
+
+function fetchDiscordAppIcon(clientId) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const options = {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      }
+    };
+    const request = https.get(`https://discord.com/api/v9/oauth2/applications/${clientId}/rpc`, options, (res) => {
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        finish(null);
+        return;
+      }
+
+      let data = '';
+      res.on('data', (chunk) => {
+        data += chunk;
+        if (data.length > 64 * 1024) {
+          request.destroy(new Error('Discord application response is too large.'));
+        }
+      });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          finish(parsed && parsed.icon ? parsed.icon : null);
+        } catch {
+          finish(null);
+        }
+      });
+    });
+    request.setTimeout(5000, () => {
+      request.destroy(new Error('Discord application request timed out.'));
+    });
+    request.on('error', (err) => {
+      console.error('[Discord RPC] HTTP Error fetching application details:', err.message);
+      finish(null);
+    });
+  });
+}
+
+async function updateDiscordAppIconUrl(clientId) {
+  if (!clientId) {
+    discordAppIconUrl = 'https://cdn.discordapp.com/app-icons/1514411481259577364/a9d1b783394865061c51ccf5b9e56338.png';
+    return;
+  }
+  if (clientId === '1514411481259577364') {
+    discordAppIconUrl = 'https://cdn.discordapp.com/app-icons/1514411481259577364/a9d1b783394865061c51ccf5b9e56338.png';
+    return;
+  }
+  const iconHash = await fetchDiscordAppIcon(clientId);
+  if (iconHash) {
+    discordAppIconUrl = `https://cdn.discordapp.com/app-icons/${clientId}/${iconHash}.png`;
+    console.log('[Discord RPC] App Icon URL updated to:', discordAppIconUrl);
+  } else {
+    discordAppIconUrl = 'https://cdn.discordapp.com/app-icons/1514411481259577364/a9d1b783394865061c51ccf5b9e56338.png';
+  }
+}
+
+function connectDiscordRpc() {
+  if (discordRpcSocket || isDiscordConnected || isConnecting || !currentDiscordSettings.enabled) return;
+
+  isConnecting = true;
+  let pipeIndex = 0;
+
+  function tryNextPipe() {
+    if (!currentDiscordSettings.enabled) { isConnecting = false; return; }
+    if (pipeIndex >= 10) {
+      isConnecting = false;
+      scheduleDiscordReconnect();
+      return;
+    }
+
+    const pipePath = process.platform === 'win32'
+      ? `\\\\.\\pipe\\discord-ipc-${pipeIndex}`
+      : `${process.env.XDG_RUNTIME_DIR || process.env.TMPDIR || process.env.TMP || '/tmp'}/discord-ipc-${pipeIndex}`;
+
+    const socket = net.createConnection(pipePath);
+
+    const handleConnectionError = () => {
+      socket.destroy();
+      pipeIndex++;
+      tryNextPipe();
+    };
+
+    socket.once('error', handleConnectionError);
+    socket.once('connect', () => {
+      socket.removeListener('error', handleConnectionError);
+      discordRpcSocket = socket;
+      isConnecting = false;
+      discordReadBuffer = Buffer.alloc(0);
+
+      socket.on('data', (chunk) => {
+        discordReadBuffer = Buffer.concat([discordReadBuffer, chunk]);
+        processDiscordBuffer();
+      });
+
+      socket.once('close', () => {
+        if (discordRpcSocket !== socket) return;
+        cleanupDiscordSocket();
+        scheduleDiscordReconnect();
+      });
+
+      socket.once('error', (err) => {
+        console.error('[Discord RPC] Socket error:', err.message);
+      });
+
+      // Send handshake (opcode 0) immediately after connection
+      const handshake = { v: 1, client_id: discordClientId };
+      sendDiscordPacket(0, handshake);
+    });
+  }
+
+  tryNextPipe();
+}
+
+// Process all complete packets sitting in discordReadBuffer
+function processDiscordBuffer() {
+  while (discordReadBuffer.length >= 8) {
+    const len = discordReadBuffer.readUInt32LE(4);
+    if (len > MAX_DISCORD_PACKET_BYTES) {
+      console.error('[Discord RPC] Rejected oversized IPC packet:', len);
+      cleanupDiscordSocket();
+      scheduleDiscordReconnect();
+      return;
+    }
+    if (discordReadBuffer.length < 8 + len) break; // wait for more data
+
+    const op = discordReadBuffer.readUInt32LE(0);
+    const body = discordReadBuffer.slice(8, 8 + len).toString('utf8');
+    discordReadBuffer = discordReadBuffer.slice(8 + len);
+
+    try {
+      const msg = JSON.parse(body);
+      if (op === 1 && msg.evt === 'READY') {
+        isDiscordConnected = true;
+        console.log('[Discord RPC] READY - connection confirmed');
+        // Send queued presence now that we are confirmed connected
+        if (lastActiveChannelName) {
+          updateDiscordPresenceForActiveChannel(lastActiveChannelName, lastActiveChannelStartTime, lastActiveChannelLogoUrl, lastActiveChannelProgramTitle);
+        } else {
+          updateDiscordPresenceIdle();
+        }
+      } else if (op === 1 && msg.evt === 'ERROR') {
+        const code = msg.data?.code ?? 'unknown';
+        const message = msg.data?.message || 'Discord rejected the RPC command.';
+        console.error(`[Discord RPC] Command failed (${code}): ${message}`);
+      } else if (op === 2) {
+        console.error('[Discord RPC] Discord closed the IPC connection:', msg.message || body);
+        cleanupDiscordSocket();
+        scheduleDiscordReconnect();
+        return;
+      }
+    } catch (e) {
+      console.error('[Discord RPC] Failed to parse packet:', e.message);
+    }
+  }
+}
+
+function sendDiscordPacket(op, payload, onFlushed) {
+  if (!discordRpcSocket || discordRpcSocket.destroyed) return false;
+
+  const jsonStr = JSON.stringify(payload);
+  const jsonLen = Buffer.byteLength(jsonStr);
+  const packet = Buffer.alloc(8 + jsonLen);
+
+  packet.writeUInt32LE(op, 0);
+  packet.writeUInt32LE(jsonLen, 4);
+  packet.write(jsonStr, 8);
+
+  discordRpcSocket.write(packet, (err) => {
+    if (err) {
+      console.error('[Discord RPC] Failed to write IPC packet:', err.message);
+      return;
+    }
+    onFlushed?.();
+  });
+  return true;
+}
+
+function scheduleDiscordReconnect(delayMs = 15000) {
+  if (!currentDiscordSettings.enabled || discordConnectTimeout) return;
+
+  discordConnectTimeout = setTimeout(() => {
+    discordConnectTimeout = null;
+    connectDiscordRpc();
+  }, delayMs);
+}
+
+function cleanupDiscordSocket() {
+  isDiscordConnected = false;
+  isConnecting = false;
+  discordReadBuffer = Buffer.alloc(0);
+  if (discordConnectTimeout) {
+    clearTimeout(discordConnectTimeout);
+    discordConnectTimeout = null;
+  }
+  if (discordRpcSocket) {
+    try { discordRpcSocket.destroy(); } catch {}
+    discordRpcSocket = null;
+  }
+}
+
+async function applyDiscordSettings(enabled, showChannel, clientId) {
+  const oldClientId = currentDiscordSettings.clientId;
+  const oldEnabled = currentDiscordSettings.enabled;
+
+  currentDiscordSettings.enabled = enabled !== undefined ? enabled : false;
+  currentDiscordSettings.showChannel = showChannel !== undefined ? showChannel : true;
+  currentDiscordSettings.clientId = clientId || '1514411481259577364';
+
+  if (!currentDiscordSettings.enabled) {
+    if (oldEnabled && isDiscordConnected) {
+      const clearSent = clearDiscordPresence(() => cleanupDiscordSocket());
+      if (!clearSent) cleanupDiscordSocket();
+    } else {
+      cleanupDiscordSocket();
+    }
+    return;
+  }
+
+  if (currentDiscordSettings.clientId !== oldClientId) {
+    cleanupDiscordSocket();
+  }
+
+  discordClientId = currentDiscordSettings.clientId;
+
+  await updateDiscordAppIconUrl(currentDiscordSettings.clientId);
+
+  if (lastActiveChannelName) {
+    updateDiscordPresenceForActiveChannel(lastActiveChannelName, lastActiveChannelStartTime, lastActiveChannelLogoUrl, lastActiveChannelProgramTitle);
+  } else {
+    updateDiscordPresenceIdle();
+  }
+}
+
+function normalizeDiscordText(value, fallback) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  const usable = text.length >= 2 ? text : fallback;
+  return Array.from(usable).slice(0, 128).join('');
+}
+
+function updateDiscordPresence(details, state, startTime, logoUrl) {
+  if (!app.isPackaged) console.log('[Discord RPC Main] Updating activity');
+  if (!isDiscordConnected) {
+    console.log('[Discord RPC Main] Socket not connected, connecting...');
+    connectDiscordRpc();
+    return;
+  }
+
+  const validStartTime = startTime instanceof Date && Number.isFinite(startTime.getTime())
+    ? startTime
+    : null;
+  const validLogoUrl = typeof logoUrl === 'string' && logoUrl.length <= MAX_DISCORD_ASSET_LENGTH
+    ? logoUrl
+    : null;
+  const payload = {
+    cmd: 'SET_ACTIVITY',
+    args: {
+      pid: process.pid,
+      activity: {
+        details: normalizeDiscordText(details, 'Watching Live TV'),
+        state: normalizeDiscordText(state, 'Watching Freaky IPTV'),
+        assets: {
+          large_image: validLogoUrl || discordAppIconUrl || 'freaky_logo',
+          large_text: 'Freaky IPTV',
+          small_image: validLogoUrl && discordAppIconUrl ? discordAppIconUrl : undefined,
+          small_text: validLogoUrl && discordAppIconUrl ? 'Freaky IPTV' : undefined
+        },
+        timestamps: validStartTime ? { start: Math.round(validStartTime.getTime()) } : undefined
+      }
+    },
+    nonce: crypto.randomUUID()
+  };
+
+  sendDiscordPacket(1, payload);
+}
+
+function clearDiscordPresence(onFlushed) {
+  if (!isDiscordConnected) return false;
+
+  const payload = {
+    cmd: 'SET_ACTIVITY',
+    args: {
+      pid: process.pid,
+      activity: null
+    },
+    nonce: crypto.randomUUID()
+  };
+
+  return sendDiscordPacket(1, payload, onFlushed);
+}
+
+function updateDiscordPresenceForActiveChannel(channelName, startTimeIso, logoUrl, programTitle) {
+  if (!app.isPackaged) console.log('[Discord RPC Main] Updating active channel activity');
+  lastActiveChannelName = channelName;
+  lastActiveChannelStartTime = startTimeIso;
+  lastActiveChannelLogoUrl = logoUrl;
+  lastActiveChannelProgramTitle = programTitle;
+
+  if (!currentDiscordSettings.enabled) return;
+
+  const startTime = startTimeIso ? new Date(startTimeIso) : null;
+  const displayState = programTitle || 'Watching Freaky IPTV';
+  const displayDetails = currentDiscordSettings.showChannel ? channelName : 'Watching Live TV';
+
+  let proxiedLogoUrl = logoUrl;
+  if (logoUrl && logoUrl.startsWith('http')) {
+    proxiedLogoUrl = `https://images.weserv.nl/?url=${encodeURIComponent(logoUrl)}&w=512&h=512&fit=contain&output=png`;
+  }
+
+  updateDiscordPresence(displayDetails, displayState, startTime, proxiedLogoUrl);
+}
+
+function updateDiscordPresenceIdle() {
+  if (!currentDiscordSettings.enabled) return;
+  updateDiscordPresence('Browsing Channels', 'Idle', null, null);
+}
+
+// IPC Handlers for Discord Presence
+registerTrustedHandle('set-discord-activity', (event, channelName, startTimeIso, logoUrl, programTitle) => {
+  assertBoundedString(channelName, 'Channel name', 256);
+  assertBoundedString(startTimeIso, 'Playback start time', 64, true);
+  assertBoundedString(logoUrl, 'Channel logo URL', MAX_DISCORD_ASSET_LENGTH, true);
+  assertBoundedString(programTitle, 'Programme title', 256, true);
+  if (!app.isPackaged) console.log('[Discord RPC IPC] Activity update received');
+  updateDiscordPresenceForActiveChannel(channelName, startTimeIso, logoUrl, programTitle);
+  return true;
+});
+
+registerTrustedHandle('clear-discord-activity', () => {
+  if (!app.isPackaged) console.log('[Discord RPC IPC] Activity clear received');
+  lastActiveChannelName = null;
+  lastActiveChannelStartTime = null;
+  lastActiveChannelLogoUrl = null;
+  lastActiveChannelProgramTitle = null;
+  if (currentDiscordSettings.enabled) {
+    updateDiscordPresenceIdle();
+  }
+  return true;
+});

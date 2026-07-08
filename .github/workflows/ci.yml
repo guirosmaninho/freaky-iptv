@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=low
+
+      - name: Audit DPAPI helper dependencies
+        run: dotnet list dpapi-helper/dpapi-helper.csproj package --vulnerable --include-transitive
+
+      - name: Audit media helper dependencies
+        run: dotnet list libvlc-proxy-helper/LibVlcProxyHelper.csproj package --vulnerable --include-transitive
+
+      - name: Run tests
+        run: npm test
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run TypeScript checks
+        run: npx tsc -b
+
+      - name: Build application
+        run: npm run build
