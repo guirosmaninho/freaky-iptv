@@ -273,7 +273,7 @@ export const App: React.FC = () => {
   // Active video channel & controls
   const [activeChannel, setActiveChannel] = useState<Channel | null>(null);
   const [activeSessionId, setActiveSessionId] = useState('');
-  const [isPlayerExpanded, setIsPlayerExpanded] = useState(false);
+  const [playerCollapseRequest, setPlayerCollapseRequest] = useState(0);
   const [currentPlayStartTime, setCurrentPlayStartTime] = useState<string>('');
   const [zapPreview, setZapPreview] = useState<Channel | null>(null);
 
@@ -656,7 +656,7 @@ export const App: React.FC = () => {
       document.documentElement.style.colorScheme = resolved;
       setSettingsDirty(false);
     }
-    setIsPlayerExpanded(false);
+    setPlayerCollapseRequest(current => current + 1);
     startTransition(() => {
       setActiveSection(current => current === section ? current : section);
     });
@@ -988,7 +988,7 @@ export const App: React.FC = () => {
 
       // Open new channel
       setActiveChannel(playbackChannel);
-      if (!preserveExpanded) setIsPlayerExpanded(false);
+      if (!preserveExpanded) setPlayerCollapseRequest(current => current + 1);
       setStatusText(`Playing ${playbackChannel.name}.`);
 
       // Add to recently viewed
@@ -1047,7 +1047,6 @@ export const App: React.FC = () => {
     setActiveChannel(null);
     setActiveSessionId('');
     setCurrentPlayStartTime('');
-    setIsPlayerExpanded(false);
     setStatusText('Playback stopped.');
     window.electron.clearDiscordActivity().catch(() => {});
   }, []);
@@ -1458,7 +1457,7 @@ export const App: React.FC = () => {
 
       {/* Main Content Pane */}
       <main
-        className={`app-main-surface ${activeChannel && !isPlayerExpanded ? 'app-main-surface--compact-player' : ''}`}
+        className={`app-main-surface ${activeChannel ? 'app-main-surface--compact-player' : ''}`}
         aria-labelledby="active-section-title"
         style={{
           flex: 1,
@@ -1541,8 +1540,7 @@ export const App: React.FC = () => {
               onPrevChannel={handlePrevChannel}
               sessionId={activeSessionId}
               onRecordSessionBytes={handleRecordSessionBytes}
-              isExpanded={isPlayerExpanded}
-              onToggleExpand={() => setIsPlayerExpanded(current => !current)}
+              collapseRequest={playerCollapseRequest}
               currentProgram={activeChannelEpgInfo.program}
               currentProgress={activeChannelEpgInfo.progress}
               onPlayChannel={playChannel}

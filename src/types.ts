@@ -274,7 +274,7 @@ export type UpdateStatus = 'idle' | 'unsupported' | 'checking' | 'up-to-date' | 
 
 export interface UpdateCheckResult {
   status: UpdateStatus;
-  target: '' | 'nsis' | 'portable';
+  target: '' | 'nsis' | 'portable' | 'release-page';
   version: string;
   notes: string;
   progress: number;
@@ -284,6 +284,7 @@ export interface UpdateCheckResult {
 declare global {
   interface Window {
     electron: {
+      platform: string;
       loadSettings: () => Promise<AppSettings>;
       saveSettings: (settings: AppSettings) => Promise<boolean>;
       loadCache: () => Promise<CacheSnapshot | null>;
@@ -299,6 +300,7 @@ declare global {
       checkForUpdates: () => Promise<UpdateCheckResult>;
       downloadUpdate: () => Promise<UpdateCheckResult>;
       installUpdate: () => Promise<UpdateCheckResult>;
+      openReleasePage: () => Promise<boolean>;
       onUpdateStatus: (callback: (state: UpdateCheckResult) => void) => () => void;
       getDataDirectory: () => Promise<string>;
       openDataDirectory: () => Promise<{ ok: boolean; path?: string; error?: string }>;

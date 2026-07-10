@@ -16,22 +16,41 @@
   "main": "main.cjs",
   "type": "module",
   "scripts": {
-    "dev": "npm run build:native && concurrently --kill-others-on-fail \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "dev": "npm run build:host && concurrently --kill-others-on-fail \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "clean:native": "node scripts/clean-native-runtimes.cjs",
-    "build:native": "npm run clean:native && npm run build:dpapi-helper && npm run build:libvlc-proxy",
-    "build:dpapi-helper": "dotnet publish dpapi-helper/dpapi-helper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -o dpapi-runtime",
+    "build:native": "npm run build:native:win",
+    "build:native:win": "npm run clean:native && npm run build:dpapi-helper && npm run build:libvlc-proxy",
+    "build:native:mac:x64": "npm run clean:native && npm run build:libvlc-proxy:mac:x64",
+    "build:native:mac:arm64": "npm run clean:native && npm run build:libvlc-proxy:mac:arm64",
+    "build:dpapi-helper": "dotnet publish dpapi-helper/dpapi-helper.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -o native-runtime/win-x64/dpapi",
     "prepare:windows-icon": "node scripts/create-windows-icon.cjs",
-    "build": "npm run prepare:windows-icon && npm run build:native && tsc -b && vite build",
-    "build:libvlc-proxy": "dotnet publish libvlc-proxy-helper/LibVlcProxyHelper.csproj -c Release -r win-x64 --self-contained true -p:DebugType=None -p:DebugSymbols=false -o libvlc-proxy-runtime && node scripts/prune-libvlc-runtime.cjs",
+    "prepare:macos-icon": "node scripts/create-macos-icon.cjs",
+    "build:renderer": "tsc -b && vite build",
+    "build:host": "node scripts/build-host.cjs",
+    "build": "npm run build:win",
+    "build:win": "npm run prepare:windows-icon && npm run build:native:win && node scripts/stage-native-runtime.cjs win-x64 && node scripts/prepare-ffmpeg.cjs win-x64 && npm run build:renderer",
+    "build:mac:x64": "npm run prepare:macos-icon && npm run build:native:mac:x64 && node scripts/stage-native-runtime.cjs darwin-x64 && node scripts/prepare-ffmpeg.cjs darwin-x64 && npm run build:renderer",
+    "build:mac:arm64": "npm run prepare:macos-icon && npm run build:native:mac:arm64 && node scripts/stage-native-runtime.cjs darwin-arm64 && node scripts/prepare-ffmpeg.cjs darwin-arm64 && npm run build:renderer",
+    "build:libvlc-proxy": "dotnet publish libvlc-proxy-helper/LibVlcProxyHelper.csproj -c Release -r win-x64 --self-contained true -p:DebugType=None -p:DebugSymbols=false -o native-runtime/win-x64/libvlc-proxy && node scripts/prune-libvlc-runtime.cjs",
+    "build:libvlc-proxy:mac:x64": "dotnet publish libvlc-proxy-helper/LibVlcProxyHelper.csproj -c Release -r osx-x64 --self-contained true -p:DebugType=None -p:DebugSymbols=false -o native-runtime/darwin-x64/libvlc-proxy",
+    "build:libvlc-proxy:mac:arm64": "dotnet publish libvlc-proxy-helper/LibVlcProxyHelper.csproj -c Release -r osx-arm64 --self-contained true -p:DebugType=None -p:DebugSymbols=false -o native-runtime/darwin-arm64/libvlc-proxy",
     "lint": "eslint .",
     "test": "node scripts/run-tests.cjs",
-    "test:e2e": "npm run build && playwright test",
-    "test:e2e:update-snapshots": "npm run build && set FREAKYIPTV_VISUAL_SNAPSHOTS=1&& playwright test --update-snapshots",
+    "test:e2e": "npm run build:host && playwright test",
+    "test:e2e:update-snapshots": "npm run build:host && node scripts/run-e2e-snapshots.cjs",
     "preview": "vite preview",
     "clean:release:win": "node scripts/clean-windows-release.cjs",
+    "clean:release": "node scripts/clean-release.cjs",
+    "clean:release:mac": "node scripts/clean-release.cjs",
     "package:win": "npm run clean:release:win && npm run build && electron-builder --win && npm run verify:package:win",
     "verify:package:win": "node scripts/verify-windows-package.cjs",
     "release:win": "npm test && npm run lint && npm run clean:release:win && npm run build && playwright test && electron-builder --win && npm run verify:package:win",
+    "package:mac:x64": "npm run build:mac:x64 && electron-builder --mac --x64 && npm run verify:package:mac -- x64",
+    "package:mac:arm64": "npm run build:mac:arm64 && electron-builder --mac --arm64 && npm run verify:package:mac -- arm64",
+    "package:mac": "npm run clean:release:mac && npm run package:mac:x64 && npm run package:mac:arm64",
+    "verify:package:mac": "node scripts/verify-macos-package.cjs",
+    "release:mac": "npm test && npm run lint && npm run clean:release:mac && npm run build:mac:x64 && playwright test && electron-builder --mac --x64 && npm run verify:package:mac -- x64 && npm run build:mac:arm64 && electron-builder --mac --arm64 && npm run verify:package:mac -- arm64",
+    "release:all": "node scripts/trigger-github-release.cjs",
     "smoke:full-hd": "node scripts/full-hd-smoke.cjs"
   },
   "dependencies": {
@@ -66,12 +85,10 @@
     "appId": "com.guiro.freakyiptv",
     "productName": "Freaky IPTV",
     "executableName": "Freaky IPTV",
-    "electronDist": "node_modules/electron/dist",
     "copyright": "Copyright (c) 2026 Freaky IPTV",
     "asar": true,
     "asarUnpack": [
-      "dpapi-runtime/**",
-      "libvlc-proxy-runtime/**",
+      "native-runtime-package/**",
       "node_modules/ffmpeg-static/**"
     ],
     "directories": {
@@ -85,8 +102,7 @@
       "preload.cjs",
       "package.json",
       "THIRD_PARTY_NOTICES.md",
-      "dpapi-runtime/**",
-      "libvlc-proxy-runtime/**"
+      "native-runtime-package/**"
     ],
     "win": {
       "icon": "build-resources/cat_icon.ico",
@@ -110,6 +126,13 @@
           ]
         }
       ]
+    },
+    "mac": {
+      "icon": "build-resources/cat_icon.icns",
+      "category": "public.app-category.entertainment",
+      "forceCodeSigning": false,
+      "target": "dmg",
+      "artifactName": "Freaky-IPTV-${version}-mac-${arch}.${ext}"
     },
     "nsis": {
       "artifactName": "Freaky-IPTV-Setup-${version}-${arch}.${ext}",

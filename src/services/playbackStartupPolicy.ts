@@ -38,6 +38,7 @@ export interface InitialPlaybackEngineInput {
   sourceUrl: string;
   streamKind: PlaybackStreamKind;
   qualityLabel?: string | null;
+  platform?: string;
   storage?: PlaybackEnginePreferenceStorage | null;
 }
 
@@ -75,13 +76,20 @@ export const chooseInitialPlaybackEngine = ({
   sourceUrl,
   streamKind,
   qualityLabel = null,
+  platform = 'win32',
   storage = undefined
 }: InitialPlaybackEngineInput): PlaybackEngine => {
   const rememberedEngine = getRememberedPlaybackEngine(sourceUrl, storage);
   if (rememberedEngine) return rememberedEngine;
   if (streamKind === 'hls') return 'hls';
   if (streamKind === 'native') return 'native';
-  return isHighDemandPlaybackQuality(qualityLabel) ? 'proxy-hardware' : 'mpegts';
+  // VideoToolbox is a valuable fallback on macOS, but opening a fresh encoder
+  // is slower than feeding a normal H.264 transport stream directly to MSE.
+  // Start with the lightweight path and retain copy -> VideoToolbox -> software
+  // fallback if the stream needs conversion.
+  return isHighDemandPlaybackQuality(qualityLabel) && platform !== 'darwin'
+    ? 'proxy-hardware'
+    : 'mpegts';
 };
 
 export const nextAdaptiveBufferState = ({

@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', 'node_modules', 'libvlc-proxy-runtime', 'test_ffmpeg.ts']),
+  globalIgnores(['dist', 'node_modules', 'native-runtime', 'native-runtime-package', 'test_ffmpeg.ts']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

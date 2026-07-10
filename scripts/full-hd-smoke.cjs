@@ -301,7 +301,7 @@ async function runDriver() {
 
   const relay = await startUpstreamRelay(stream.url);
   const outputPort = await getFreePort();
-  const helperPath = path.join(__dirname, '..', 'libvlc-proxy-runtime', 'LibVlcProxyHelper.exe');
+  const helperPath = path.join(__dirname, '..', 'native-runtime', 'win-x64', 'libvlc-proxy', 'LibVlcProxyHelper.exe');
   const helper = spawn(helperPath, [], {
     cwd: path.dirname(helperPath),
     env: {

@@ -16,9 +16,10 @@ const unpackedDirectory = path.join(releaseDirectory, 'win-unpacked');
 const unpackedExecutable = path.join(unpackedDirectory, 'Freaky IPTV.exe');
 const unpackedResources = path.join(unpackedDirectory, 'resources');
 const unpackedFiles = path.join(unpackedResources, 'app.asar.unpacked');
-const dpapiDirectory = path.join(unpackedFiles, 'dpapi-runtime');
+const nativeRuntime = path.join(unpackedFiles, 'native-runtime-package');
+const dpapiDirectory = path.join(nativeRuntime, 'dpapi');
 const dpapiExecutable = path.join(dpapiDirectory, 'dpapi-helper.exe');
-const proxyDirectory = path.join(unpackedFiles, 'libvlc-proxy-runtime');
+const proxyDirectory = path.join(nativeRuntime, 'libvlc-proxy');
 const proxyExecutable = path.join(proxyDirectory, 'LibVlcProxyHelper.exe');
 const ffmpegExecutable = path.join(unpackedFiles, 'node_modules', 'ffmpeg-static', 'ffmpeg.exe');
 
@@ -108,6 +109,7 @@ async function main() {
   assert.match(updateMetadata, /sha512:/);
   requireFile(unpackedExecutable, 1 * 1024 * 1024);
   requireFile(path.join(unpackedResources, 'app.asar'), 1 * 1024 * 1024);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(nativeRuntime, 'runtime.json'), 'utf8')).runtime, 'win-x64');
   requireFile(dpapiExecutable, 10 * 1024 * 1024);
   requireFile(proxyExecutable, 100 * 1024);
   requireFile(ffmpegExecutable, 10 * 1024 * 1024);

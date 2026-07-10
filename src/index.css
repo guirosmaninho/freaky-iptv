@@ -1314,7 +1314,6 @@ select:focus-visible {
   box-sizing: border-box;
   isolation: isolate;
   transition:
-    height 0.32s cubic-bezier(0.22, 1, 0.36, 1),
     background-color 0.25s ease,
     border-color 0.25s ease,
     box-shadow 0.25s ease;
@@ -1385,6 +1384,7 @@ select:focus-visible {
   border: none;
   border-radius: 0;
   background: #050608;
+  contain: layout paint;
 }
 
 .player-shell--fullscreen {
@@ -1443,7 +1443,9 @@ select:focus-visible {
   position: absolute;
   z-index: 1;
   background: #050608;
-  transition: all 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  /* Resizing a decoded video layer must be immediate. Animating width, height
+     and position forces the compositor to resample every frame. */
+  transition: none;
 }
 
 .player-video--compact {
@@ -1467,6 +1469,7 @@ select:focus-visible {
   height: 100%;
   object-fit: contain;
   cursor: default;
+  contain: layout paint;
   /* Use highest-quality scaling when the video element is resized */
   image-rendering: high-quality;
 }
@@ -1637,8 +1640,7 @@ select:focus-visible {
   opacity: 1;
   transition:
     opacity 0.24s ease,
-    transform 0.24s ease,
-    filter 0.24s ease;
+    transform 0.24s ease;
 }
 
 .hud-glass-layer {
@@ -1698,21 +1700,18 @@ select:focus-visible {
   opacity: 0;
   pointer-events: none;
   transform: translateX(-50%) translateY(18px) scale(0.98);
-  filter: blur(2px);
 }
 
 .hud-controls-shell--visible {
   opacity: 1;
   pointer-events: auto;
   transform: translateX(-50%);
-  filter: none;
 }
 
 .hud-controls-shell:has(:focus-visible) {
   opacity: 1;
   pointer-events: auto;
   transform: translateX(-50%);
-  filter: none;
 }
 
 .hud-channel {
@@ -4655,8 +4654,9 @@ body::before,
     inset 14px 0 30px rgba(89, 185, 255, 0.16),
     inset -14px 0 30px rgba(255, 116, 160, 0.14),
     0 24px 60px rgba(0, 0, 0, 0.24);
-  backdrop-filter: blur(2px) saturate(180%);
-  -webkit-backdrop-filter: blur(2px) saturate(180%);
+  /* Keep the video and HUD on independent compositor layers. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .hud-glass-layer {
@@ -4671,8 +4671,9 @@ body::before,
     inset 14px 0 30px rgba(89, 185, 255, 0.16),
     inset -14px 0 30px rgba(255, 116, 160, 0.14),
     0 24px 60px rgba(0, 0, 0, 0.24);
-  backdrop-filter: blur(2px) saturate(180%);
-  -webkit-backdrop-filter: blur(2px) saturate(180%);
+  /* Blurring a live video surface forces an expensive compositor pass. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .hud-glass-layer::before {
@@ -4684,7 +4685,6 @@ body::before,
     backdrop-filter: url("#liquid-glass-refraction") blur(16px) saturate(155%);
     -webkit-backdrop-filter: url("#liquid-glass-refraction") blur(16px) saturate(155%);
   }
-  .hud-glass-layer,
   .player-shell--compact {
     backdrop-filter: url("#liquid-glass-refraction") blur(2px) saturate(180%);
     -webkit-backdrop-filter: url("#liquid-glass-refraction") blur(2px) saturate(180%);

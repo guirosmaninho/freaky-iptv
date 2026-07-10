@@ -29,18 +29,24 @@ const { assertWritableDirectory, clampCaptureBounds, createUniqueMediaPath, deco
 const { createPortableReplacementPlan, isSafePortableExecutablePath } = require('./electron/portableUpdate.cjs');
 const { createFileSnapshot, migrateLegacyData, restoreFileSnapshot } = require('./electron/storageCore.cjs');
 const { compareVersions, isTrustedGithubAssetUrl, isTrustedGithubRedirectUrl, PROJECT_OWNER, PROJECT_REPOSITORY, selectReleaseCandidate } = require('./electron/updateCore.cjs');
+const { getFfmpegProbeArgs, getFfmpegProxyModes, getNativeRuntimeDirectory, getNextFfmpegProxyMode, resolvePlatformDirectories } = require('./electron/platformCore.cjs');
 
-// Keep all application-owned state under LocalAppData. Tests can isolate this
-// with FREAKYIPTV_DATA_DIR without touching the user's real profile.
-const LOCAL_APP_DATA = process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE, 'AppData', 'Local');
-const LEGACY_DATA_DIR = path.join(LOCAL_APP_DATA, 'IptvPlayer');
-const DATA_DIR = process.env.FREAKYIPTV_DATA_DIR || path.join(LOCAL_APP_DATA, 'FreakyIPTV');
+// Keep all application-owned state under the platform's standard application
+// data directory. Tests can isolate this with FREAKYIPTV_DATA_DIR.
+const PLATFORM_DIRECTORIES = resolvePlatformDirectories({
+  platform: process.platform,
+  env: process.env,
+  appDataPath: app.getPath('appData'),
+  videosPath: app.getPath('videos')
+});
+const LEGACY_DATA_DIR = PLATFORM_DIRECTORIES.legacyDir;
+const DATA_DIR = PLATFORM_DIRECTORIES.dataDir;
 const CACHE_DIR = path.join(DATA_DIR, 'cache');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const CACHE_FILE = path.join(CACHE_DIR, 'snapshot.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'watch_history.json');
-const DEFAULT_RECORDING_DIR = process.env.FREAKYIPTV_RECORDINGS_DIR || path.join(process.env.USERPROFILE || LOCAL_APP_DATA, 'Videos', 'Freaky IPTV');
+const DEFAULT_RECORDING_DIR = PLATFORM_DIRECTORIES.recordingDir;
 const MAX_TEXT_DOWNLOAD_BYTES = 150 * 1024 * 1024;
 const MAX_DECOMPRESSED_TEXT_BYTES = 150 * 1024 * 1024;
 const MAX_SETTINGS_PAYLOAD_BYTES = 1024 * 1024;
@@ -54,13 +60,14 @@ const MAX_PNG_BYTES = 16 * 1024 * 1024;
 const MAX_UPDATE_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const PROJECT_URL = 'https://github.com/guirosmaninho/freaky-iptv';
 const NEW_ISSUE_URL = 'https://github.com/guirosmaninho/freaky-iptv/issues/new';
+const GITHUB_RELEASES_URL = `${PROJECT_URL}/releases/latest`;
 const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${PROJECT_OWNER}/${PROJECT_REPOSITORY}/releases/latest`;
-const ALLOWED_EXTERNAL_URLS = new Set([PROJECT_URL, NEW_ISSUE_URL]);
+const ALLOWED_EXTERNAL_URLS = new Set([PROJECT_URL, NEW_ISSUE_URL, GITHUB_RELEASES_URL]);
 const TRUSTED_LOCAL_MEDIA_URLS = new Set();
 
 const migrationStatus = process.env.FREAKYIPTV_E2E === '1'
   ? { migrated: false, status: 'test-isolated', copied: [] }
-  : migrateLegacyData({ legacyDir: LEGACY_DATA_DIR, dataDir: DATA_DIR });
+  : LEGACY_DATA_DIR ? migrateLegacyData({ legacyDir: LEGACY_DATA_DIR, dataDir: DATA_DIR }) : { migrated: false, status: 'not-applicable', copied: [] };
 fs.mkdirSync(CACHE_DIR, { recursive: true });
 fs.mkdirSync(BACKUP_DIR, { recursive: true });
 app.setPath('userData', path.join(DATA_DIR, 'electron'));
@@ -78,9 +85,12 @@ let lastActiveChannelStartTime = null;
 let lastActiveChannelLogoUrl = null;
 let lastActiveChannelProgramTitle = null;
 
-// Safe Encryption Key Derivation (Windows Machine GUID + Windows Username)
+// Safe Encryption Key Derivation for legacy Windows fallback values only.
 let encryptionKey = null;
 function getEncryptionKey() {
+  if (process.platform !== 'win32') {
+    throw new Error('The legacy Windows fallback encryption is unavailable on this platform.');
+  }
   if (encryptionKey) return encryptionKey;
   try {
     let machineGuid = '';
@@ -129,8 +139,10 @@ function decrypt(base64Text) {
     }
   }
   
-  // Check if it's using the native crypto fallback format
+  // The fallback scheme was used only by old Windows releases. New values are
+  // always stored through Electron safeStorage (Keychain on macOS).
   if (base64Text.startsWith('fallback:')) {
+    if (process.platform !== 'win32') return '';
     try {
       const parts = base64Text.split(':');
       const iv = Buffer.from(parts[1], 'hex');
@@ -145,8 +157,15 @@ function decrypt(base64Text) {
     }
   }
 
+  if (process.platform !== 'win32') {
+    // A raw URL can come from an old, unencrypted settings file. DPAPI values
+    // cannot be decrypted outside Windows and must instead be restored through
+    // the password-encrypted backup flow.
+    return /^https?:\/\//i.test(base64Text) ? base64Text : '';
+  }
+
   try {
-    const helperPath = getUnpackedResourcePath(path.join('dpapi-runtime', 'dpapi-helper.exe'));
+    const helperPath = getNativeRuntimePath('dpapi', 'dpapi-helper.exe');
     if (fs.existsSync(helperPath)) {
       const result = spawnSync(helperPath, ['unprotect', base64Text], { encoding: 'utf8' });
       if (result.status === 0 && result.stdout) {
@@ -372,6 +391,13 @@ function getUnpackedResourcePath(relativePath) {
   return path.join(basePath, relativePath);
 }
 
+function getNativeRuntimePath(...relativeParts) {
+  if (app.isPackaged) {
+    return getUnpackedResourcePath(path.join('native-runtime-package', ...relativeParts));
+  }
+  return path.join(__dirname, 'native-runtime', getNativeRuntimeDirectory(process.platform, process.arch), ...relativeParts);
+}
+
 function assertPlainObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError(`${label} must be an object.`);
@@ -574,8 +600,10 @@ autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = false;
 
 function getUpdateTarget() {
-  if (!app.isPackaged || process.platform !== 'win32') return '';
-  return process.env.PORTABLE_EXECUTABLE_FILE ? 'portable' : 'nsis';
+  if (!app.isPackaged) return '';
+  if (process.platform === 'win32') return process.env.PORTABLE_EXECUTABLE_FILE ? 'portable' : 'nsis';
+  if (process.platform === 'darwin') return 'release-page';
+  return '';
 }
 
 function getPublicUpdateState() {
@@ -618,6 +646,11 @@ function updateFailure(error) {
     progress: 0,
     message: 'Nao foi possivel procurar ou transferir a atualizacao. Tente novamente.'
   });
+}
+
+async function openReleasePage() {
+  await shell.openExternal(GITHUB_RELEASES_URL);
+  return true;
 }
 
 function getGithubJson(urlText) {
@@ -773,12 +806,27 @@ async function checkForManualUpdate() {
       status: 'unsupported',
       target: '',
       progress: 0,
-      message: 'As atualizacoes estao disponiveis apenas na aplicacao Windows empacotada.'
+      message: 'As atualizacoes estao disponiveis apenas numa aplicacao empacotada.'
     });
   }
 
   resetUpdateState(target);
   try {
+    if (target === 'release-page') {
+      const release = await getGithubJson(GITHUB_LATEST_RELEASE_URL);
+      if (!release || release.draft || release.prerelease || compareVersions(release.tag_name, app.getVersion()) <= 0) {
+        return publishUpdateState({ status: 'up-to-date', message: 'Ja tem a versao mais recente.' });
+      }
+      const version = release.tag_name.replace(/^v/i, '');
+      await openReleasePage();
+      return publishUpdateState({
+        status: 'available',
+        version,
+        notes: typeof release.body === 'string' ? release.body.slice(0, 16 * 1024) : '',
+        message: 'Nova versao encontrada. As Releases do GitHub foram abertas no navegador.'
+      });
+    }
+
     if (target === 'portable') {
       const release = await getGithubJson(GITHUB_LATEST_RELEASE_URL);
       const candidate = selectReleaseCandidate(release, app.getVersion(), 'portable');
@@ -811,6 +859,11 @@ async function checkForManualUpdate() {
 }
 
 async function downloadManualUpdate() {
+  if (updateState.target === 'release-page') {
+    await openReleasePage();
+    return publishUpdateState({ status: 'available', message: 'As Releases do GitHub foram abertas no navegador.' });
+  }
+
   if (updateState.status !== 'available' || !updateState.target) {
     return publishUpdateState({ status: 'error', message: 'Procure uma atualizacao antes de iniciar a transferencia.' });
   }
@@ -841,6 +894,9 @@ async function downloadManualUpdate() {
 }
 
 function installManualUpdate() {
+  if (updateState.target === 'release-page') {
+    return publishUpdateState({ status: 'unsupported', message: 'No macOS, descarregue a nova versao nas Releases do GitHub.' });
+  }
   if (updateState.status !== 'downloaded' || !updateState.target) {
     return publishUpdateState({ status: 'error', message: 'A atualizacao ainda nao esta pronta para instalar.' });
   }
@@ -979,6 +1035,7 @@ registerTrustedHandle('get-app-version', () => {
 registerTrustedHandle('check-for-updates', () => checkForManualUpdate());
 registerTrustedHandle('download-update', () => downloadManualUpdate());
 registerTrustedHandle('install-update', () => installManualUpdate());
+registerTrustedHandle('open-release-page', () => openReleasePage());
 
 registerTrustedHandle('get-data-directory', () => {
   return DATA_DIR;
@@ -1895,7 +1952,7 @@ function getFfmpegEncoderList() {
   }
 
   try {
-    const result = spawnSync('ffmpeg', ['-hide_banner', '-encoders'], {
+    const result = spawnSync(resolveFfmpegPath(), ['-hide_banner', '-encoders'], {
       encoding: 'utf8',
       windowsHide: true,
       timeout: 3000
@@ -1914,12 +1971,13 @@ function hasFfmpegEncoder(name) {
 }
 
 function getPreferredAacEncoder() {
-  return hasFfmpegEncoder('aac_mf') ? 'aac_mf' : 'aac';
+  return process.platform === 'win32' && hasFfmpegEncoder('aac_mf') ? 'aac_mf' : 'aac';
 }
 
 function findLibVlcProxyHelperPath() {
+  const executableName = process.platform === 'win32' ? 'LibVlcProxyHelper.exe' : 'LibVlcProxyHelper';
   const candidates = [
-    getUnpackedResourcePath(path.join('libvlc-proxy-runtime', 'LibVlcProxyHelper.exe')),
+    getNativeRuntimePath('libvlc-proxy', executableName),
     path.join(__dirname, 'libvlc-proxy-helper', 'bin', 'Release', 'net8.0-windows10.0.17763.0', 'win-x64', 'publish', 'LibVlcProxyHelper.exe'),
     path.join(__dirname, 'libvlc-proxy-helper', 'bin', 'Release', 'net8.0-windows10.0.17763.0', 'LibVlcProxyHelper.exe'),
     path.join(__dirname, 'libvlc-proxy-helper', 'bin', 'Debug', 'net8.0-windows10.0.17763.0', 'LibVlcProxyHelper.exe')
@@ -2301,7 +2359,9 @@ registerTrustedHandle('start-vlc-proxy', async (event, url, options = {}) => {
     }
     const relayUrl = sharedRelay ? sharedRelay.url : await startUpstreamRelay(url);
     const { spawn } = require('child_process');
-    const requestedMode = options && options.mode === 'hardware' ? 'hardware-d3d11' : 'copy';
+    const requestedMode = options && options.mode === 'hardware'
+      ? (process.platform === 'darwin' ? 'hardware-videotoolbox' : 'hardware-d3d11')
+      : 'copy';
     const audioEncoder = getPreferredAacEncoder();
 
     vlcOutputRelayServer = http.createServer((req, res) => {
@@ -2324,66 +2384,9 @@ registerTrustedHandle('start-vlc-proxy', async (event, url, options = {}) => {
           return;
         }
 
-        const modes = {
-          copy: {
-            label: `copy-video-${audioEncoder}`,
-            args: [
-              '-map', '0:v:0?', '-map', '0:a:0?',
-              '-c:v', 'copy',
-              '-c:a', audioEncoder,
-              '-b:a', '192k'
-            ]
-          },
-          'hardware-d3d11': {
-            label: `h264_mf-d3d11-high-${audioEncoder}`,
-            inputArgs: ['-hwaccel', 'd3d11va'],
-            args: [
-              '-map', '0:v:0?', '-map', '0:a:0?',
-              '-pix_fmt', 'nv12',
-              '-c:v', 'h264_mf',
-              '-hw_encoding', '1',
-              '-scenario', 'live_streaming',
-              '-rate_control', 'pc_vbr',
-              '-quality', '100',
-              '-b:v', '24000k',
-              '-maxrate', '36000k',
-              '-bufsize', '72000k',
-              '-c:a', audioEncoder,
-              '-b:a', '192k'
-            ]
-          },
-          hardware: {
-            label: `h264_mf-high-${audioEncoder}`,
-            args: [
-              '-map', '0:v:0?', '-map', '0:a:0?',
-              '-pix_fmt', 'nv12',
-              '-c:v', 'h264_mf',
-              '-hw_encoding', '1',
-              '-scenario', 'live_streaming',
-              '-rate_control', 'pc_vbr',
-              '-quality', '100',
-              '-b:v', '24000k',
-              '-maxrate', '36000k',
-              '-bufsize', '72000k',
-              '-c:a', audioEncoder,
-              '-b:a', '192k'
-            ]
-          },
-          software: {
-            label: `libx264-ultrafast-${audioEncoder}`,
-            args: [
-              '-map', '0:v:0?', '-map', '0:a:0?',
-              '-c:v', 'libx264',
-              '-preset', 'ultrafast',
-              '-tune', 'zerolatency',
-              '-crf', '18',
-              '-pix_fmt', 'yuv420p',
-              '-c:a', audioEncoder,
-              '-b:a', '192k'
-            ]
-          }
-        };
+        const modes = getFfmpegProxyModes(process.platform, audioEncoder);
         const selectedMode = modes[mode] || modes.copy;
+        const probeArgs = getFfmpegProbeArgs(process.platform, mode);
 
         console.log(`[FFmpeg proxy] Spawning FFmpeg mode: ${selectedMode.label}`);
 
@@ -2393,12 +2396,7 @@ registerTrustedHandle('start-vlc-proxy', async (event, url, options = {}) => {
           // +genpts: regenerate PTS for better sync; discardcorrupt removed to
           // avoid dropping valid frames from live IPTV streams with minor TS issues
           '-fflags', '+genpts',
-          // 2 MB probe gives FFmpeg enough data to correctly detect Full HD
-          // stream parameters (bitrate, codec profile, colour space) without
-          // slowing down startup ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â copy mode starts output as soon as the first
-          // keyframe arrives regardless of this value
-          '-analyzeduration', '1000000',
-          '-probesize', '2097152',
+          ...probeArgs,
           '-user_agent', 'VLC/3.0.18 LibVLC/3.0.18',
           '-reconnect', '1',
           '-reconnect_at_eof', '1',
@@ -2449,19 +2447,10 @@ registerTrustedHandle('start-vlc-proxy', async (event, url, options = {}) => {
         proc.on('exit', (code) => {
           console.log(`[FFmpeg proxy] Process (${selectedMode.label}) exited with code ${code}`);
           if (!responseSent && code !== 0 && code !== null && !req.socket.destroyed) {
-            if (mode === 'copy') {
-              console.warn('[FFmpeg proxy] Copy-video relay failed before output, falling back to GPU encode...');
-              runFfmpeg('hardware-d3d11');
-              return;
-            }
-            if (mode === 'hardware-d3d11') {
-              console.warn('[FFmpeg proxy] D3D11 hardware path failed before output, retrying Media Foundation hardware encode without hardware decode...');
-              runFfmpeg('hardware');
-              return;
-            }
-            if (mode === 'hardware') {
-              console.warn('[FFmpeg proxy] All hardware encode paths failed before output, falling back to software encode...');
-              runFfmpeg('software');
+            const nextMode = getNextFfmpegProxyMode(process.platform, mode);
+            if (nextMode) {
+              console.warn(`[FFmpeg proxy] ${selectedMode.label} failed before output, retrying ${nextMode}.`);
+              runFfmpeg(nextMode);
               return;
             }
           }
@@ -2474,19 +2463,10 @@ registerTrustedHandle('start-vlc-proxy', async (event, url, options = {}) => {
         proc.on('error', (err) => {
           console.error(`[FFmpeg proxy] Process (${selectedMode.label}) error:`, err);
           if (!responseSent && !req.socket.destroyed) {
-            if (mode === 'copy') {
-              console.warn('[FFmpeg proxy] Copy-video relay error, falling back to GPU encode...');
-              runFfmpeg('hardware-d3d11');
-              return;
-            }
-            if (mode === 'hardware-d3d11') {
-              console.warn('[FFmpeg proxy] D3D11 hardware path error, retrying Media Foundation hardware encode without hardware decode...');
-              runFfmpeg('hardware');
-              return;
-            }
-            if (mode === 'hardware') {
-              console.warn('[FFmpeg proxy] All hardware encode paths failed, falling back to software encode...');
-              runFfmpeg('software');
+            const nextMode = getNextFfmpegProxyMode(process.platform, mode);
+            if (nextMode) {
+              console.warn(`[FFmpeg proxy] ${selectedMode.label} errored, retrying ${nextMode}.`);
+              runFfmpeg(nextMode);
               return;
             }
           }

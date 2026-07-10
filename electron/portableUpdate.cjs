@@ -1,36 +1,37 @@
 const path = require('node:path');
+const windowsPath = path.win32;
 
 const WINDOWS_SHELL_META = /[&|<>()^%!`]/;
 const PORTABLE_EXECUTABLE_PATTERN = /^Freaky[ .-]IPTV-\d+\.\d+\.\d+-Portable-x64\.exe$/i;
 
 function isSafePortableExecutablePath(filePath) {
   return typeof filePath === 'string' &&
-    path.isAbsolute(filePath) &&
-    path.extname(filePath).toLowerCase() === '.exe' &&
+    windowsPath.isAbsolute(filePath) &&
+    windowsPath.extname(filePath).toLowerCase() === '.exe' &&
     !WINDOWS_SHELL_META.test(filePath) &&
-    PORTABLE_EXECUTABLE_PATTERN.test(path.basename(filePath));
+    PORTABLE_EXECUTABLE_PATTERN.test(windowsPath.basename(filePath));
 }
 
 function assertSafePath(filePath, label, extension) {
-  if (typeof filePath !== 'string' || !path.isAbsolute(filePath) || WINDOWS_SHELL_META.test(filePath)) {
+  if (typeof filePath !== 'string' || !windowsPath.isAbsolute(filePath) || WINDOWS_SHELL_META.test(filePath)) {
     throw new TypeError(`${label} must be a safe absolute path.`);
   }
-  if (extension && path.extname(filePath).toLowerCase() !== extension) {
+  if (extension && windowsPath.extname(filePath).toLowerCase() !== extension) {
     throw new TypeError(`${label} must use the ${extension} extension.`);
   }
-  return path.resolve(filePath);
+  return windowsPath.resolve(filePath);
 }
 
 function createPortableReplacementPlan({ executablePath, downloadedPath, pid }) {
   const applicationPath = assertSafePath(executablePath, 'Portable executable', '.exe');
   const updatePath = assertSafePath(downloadedPath, 'Downloaded update');
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new TypeError('Process id must be a positive integer.');
-  if (path.dirname(applicationPath) !== path.dirname(updatePath)) {
+  if (windowsPath.dirname(applicationPath) !== windowsPath.dirname(updatePath)) {
     throw new RangeError('Portable update files must be in the same directory.');
   }
 
-  const backupPath = path.join(path.dirname(applicationPath), `.${path.basename(applicationPath)}.previous`);
-  const scriptPath = path.join(path.dirname(applicationPath), `.${path.basename(applicationPath)}.update-${pid}.cmd`);
+  const backupPath = windowsPath.join(windowsPath.dirname(applicationPath), `.${windowsPath.basename(applicationPath)}.previous`);
+  const scriptPath = windowsPath.join(windowsPath.dirname(applicationPath), `.${windowsPath.basename(applicationPath)}.update-${pid}.cmd`);
   const script = `@echo off\r\n` +
     `setlocal DisableDelayedExpansion\r\n` +
     `:wait_for_freaky_iptv\r\n` +
