@@ -142,7 +142,7 @@ test.beforeAll(async () => {
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true'
     }
   });
-  page = await electronApp.firstWindow();
+  page = electronApp.windows()[0] || await electronApp.firstWindow();
   await page.waitForLoadState('domcontentloaded');
   await seedApplication();
 });
@@ -232,6 +232,25 @@ test('renders the main screens at supported window sizes', async () => {
   await page.getByRole('button', { name: 'Clear cache' }).click();
 });
 
+test('checks for updates only after an explicit About action', async () => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.getByRole('button', { name: 'About', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Atualizações' })).toBeVisible();
+  const versionRow = page.locator('.about-info-row').filter({ hasText: 'App Version' });
+  const updateButton = versionRow.getByRole('button', { name: 'Procurar atualizações', exact: true });
+  await expect(page.locator('.about-updates').getByRole('button', { name: 'Procurar atualizações', exact: true })).toHaveCount(0);
+  const versionControlLayout = await versionRow.evaluate((row) => {
+    const versionBadge = row.querySelector('.version-badge')?.getBoundingClientRect();
+    const button = row.querySelector('button')?.getBoundingClientRect();
+    return { versionBottom: versionBadge?.bottom, buttonTop: button?.top, buttonHeight: button?.height };
+  });
+  expect(versionControlLayout.buttonTop).toBeGreaterThanOrEqual(versionControlLayout.versionBottom - 1);
+  expect(versionControlLayout.buttonHeight).toBeLessThanOrEqual(28);
+  await expect(updateButton).toBeEnabled();
+  await updateButton.click();
+  await expect(page.getByRole('status')).toContainText('aplicacao Windows empacotada');
+  await expect(updateButton).toHaveAccessibleName('Procurar atualizações');
+});
 test('zaps with arrow keys, wraps channels, and preserves full app mode', async () => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.getByRole('button', { name: 'Live TV', exact: true }).click();
@@ -243,25 +262,68 @@ test('zaps with arrow keys, wraps channels, and preserves full app mode', async 
   await expect(page.getByRole('button', { name: /last channel/i })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^play$/i })).toHaveCount(0);
   await compareVisualSnapshot('player-compact-1920x1080.png', { animations: 'disabled' });
+
+  const compactGlass = await page.locator('.player-shell--compact').evaluate((element) => {
+    const style = getComputedStyle(element);
+    const alpha = Number(style.backgroundColor.match(/rgba?\([^,]+,\s*[^,]+,\s*[^,]+(?:,\s*([\d.]+))?\)/)?.[1] ?? 1);
+    return { alpha, backdropFilter: style.backdropFilter };
+  });
+  expect(compactGlass.alpha).toBeLessThanOrEqual(0.1);
+  expect(compactGlass.backdropFilter).toContain('liquid-glass-refraction');
+
   await page.getByRole('button', { name: /Expand News One player/ }).click();
   await expect(page.locator('.player-shell')).toHaveClass(/player-shell--expanded/);
   await compareVisualSnapshot('player-full-app-controls-visible-1920x1080.png', { animations: 'disabled' });
 
-  const overlappingControls = await page.locator('.hud-controls-inner button:visible').evaluateAll(buttons => {
-    const rectangles = buttons.map(button => ({ label: button.getAttribute('title') || button.getAttribute('aria-label') || 'button', rect: button.getBoundingClientRect() }));
-    const overlaps = [];
-    for (let left = 0; left < rectangles.length; left += 1) {
-      for (let right = left + 1; right < rectangles.length; right += 1) {
-        const a = rectangles[left];
-        const b = rectangles[right];
-        const width = Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left);
-        const height = Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top);
-        if (width > 1 && height > 1) overlaps.push(`${a.label} overlaps ${b.label}`);
-      }
-    }
-    return overlaps;
+  const hudGlass = await page.locator('.hud-glass-layer').evaluate((element) => {
+    const style = getComputedStyle(element);
+    const alpha = Number(style.backgroundColor.match(/rgba?\([^,]+,\s*[^,]+,\s*[^,]+(?:,\s*([\d.]+))?\)/)?.[1] ?? 1);
+    return { alpha, backdropFilter: style.backdropFilter };
   });
-  expect(overlappingControls).toEqual([]);
+  expect(hudGlass.alpha).toBeLessThanOrEqual(0.1);
+  expect(hudGlass.backdropFilter).toContain('liquid-glass-refraction');
+
+  for (const viewportWidth of [1920, 1500, 1366, 1280, 1200, 1024]) {
+    await page.setViewportSize({ width: viewportWidth, height: 720 });
+    await page.mouse.move(viewportWidth / 2, 360);
+    await expect(page.locator('.hud-controls-shell')).toHaveClass(/hud-controls-shell--visible/);
+
+    const layoutErrors = await page.locator('.hud-controls-inner').evaluate((hud) => {
+      const isVisible = (element) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+      };
+      const intersects = (a, b) => (
+        Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1
+        && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1
+      );
+      const describe = (element) => element.getAttribute('title') || element.getAttribute('aria-label') || element.className || element.tagName;
+      const errors = [];
+      const groups = [...hud.querySelectorAll('.hud-channel, .hud-transport, .hud-utilities')].filter(isVisible);
+      const controls = [...hud.querySelectorAll('button, input')].filter(isVisible);
+
+      for (let left = 0; left < groups.length; left += 1) {
+        for (let right = left + 1; right < groups.length; right += 1) {
+          if (intersects(groups[left].getBoundingClientRect(), groups[right].getBoundingClientRect())) {
+            errors.push(`${describe(groups[left])} overlaps ${describe(groups[right])}`);
+          }
+        }
+      }
+      for (let left = 0; left < controls.length; left += 1) {
+        for (let right = left + 1; right < controls.length; right += 1) {
+          if (intersects(controls[left].getBoundingClientRect(), controls[right].getBoundingClientRect())) {
+            errors.push(`${describe(controls[left])} overlaps ${describe(controls[right])}`);
+          }
+        }
+      }
+      return errors;
+    });
+    expect(layoutErrors, `HUD layout at ${viewportWidth}px`).toEqual([]);
+  }
+
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.mouse.move(960, 540);
 
   const stopAlignment = await page.locator('.hud-controls-inner').evaluate((hud) => {
     const stop = hud.querySelector('.player-stop-button');
@@ -288,12 +350,34 @@ test('zaps with arrow keys, wraps channels, and preserves full app mode', async 
 test('enters native fullscreen and returns without losing playback', async () => {
   await page.locator('button[title="Fullscreen"]').click();
   await expect.poll(() => electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen())).toBe(true);
-  await page.keyboard.press('Escape');
+  await page.locator('button[title="Exit fullscreen"]').click();
   await expect.poll(() => electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen())).toBe(false);
   await expect(page.locator('.player-shell')).toBeVisible();
 });
 
+test('stopping playback exits native fullscreen before removing the player', async () => {
+  await page.getByRole('button', { name: 'Live TV', exact: true }).click();
+  await page.getByRole('button', { name: 'Play News One' }).click();
+  await expect(page.locator('.player-shell')).toBeVisible();
+  await page.getByRole('button', { name: /Expand News One player/ }).click();
+  await expect(page.locator('.player-shell')).toHaveClass(/player-shell--expanded/);
+
+  await page.locator('button[title="Fullscreen"]').click();
+  await expect.poll(() => electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen())).toBe(true);
+
+  await page.locator('button[title="Stop playback"]').click();
+
+  await expect.poll(() => electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen())).toBe(false);
+  await expect(page.locator('.player-shell')).toHaveCount(0);
+});
+
 test('captures the video frame to disk and clipboard', async () => {
+  await page.getByRole('button', { name: 'Live TV', exact: true }).click();
+  await page.getByRole('button', { name: 'Play News One' }).click();
+  await expect(page.locator('.player-shell')).toBeVisible();
+  await page.getByRole('button', { name: /Expand News One player/ }).click();
+  await expect(page.locator('.player-shell')).toHaveClass(/player-shell--expanded/);
+
   await page.getByRole('button', { name: 'Take screenshot' }).click();
   await expect(page.locator('.player-media-notice')).toContainText('Screenshot');
   await expect.poll(() => fs.readdirSync(mediaDirectory).filter((name) => name.endsWith('.png')).length).toBe(1);

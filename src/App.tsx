@@ -1037,6 +1037,11 @@ export const App: React.FC = () => {
 
   // Handle Stop Playback
   const handleStopPlayback = useCallback(async () => {
+    try {
+      await window.electron.setWindowFullscreen(false);
+    } catch (error) {
+      console.warn('Failed to exit fullscreen while stopping playback:', error);
+    }
     await finishActiveRecording();
     await endCurrentSessionRef.current();
     setActiveChannel(null);

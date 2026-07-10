@@ -147,7 +147,7 @@ describe('Electron security contract', () => {
     assert.match(playerSource, /Return broadcast to app/);
   });
 
-  it('opens only the public project and issue URLs without embedding a webhook', () => {
+  it('keeps bug reporting on GitHub without an in-app report surface', () => {
     const mainSource = readProjectFile('main.cjs');
     const preloadSource = readProjectFile('preload.cjs');
     const aboutSource = readProjectFile('src/components/AboutTab.tsx');
@@ -166,7 +166,7 @@ describe('Electron security contract', () => {
     assert.doesNotMatch(preloadSource, /submitBugReport/);
     assert.doesNotMatch(typesSource, /BugReportRequest|BugReportResult|submitBugReport/);
     assert.doesNotMatch(aboutSource, /freaky-iptv-dev|support Discord|<form/);
-    assert.match(aboutSource, /https:\/\/github\.com\/guirosmaninho\/freaky-iptv\/issues\/new/);
+    assert.doesNotMatch(aboutSource, /Report a bug|Create GitHub issue|NEW_ISSUE_URL/);
     assert.equal(packageJson.dependencies?.dotenv, undefined);
     assert.equal(packageJson.repository?.url, 'https://github.com/guirosmaninho/freaky-iptv.git');
     assert.equal(packageJson.bugs?.url, 'https://github.com/guirosmaninho/freaky-iptv/issues');

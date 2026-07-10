@@ -1861,10 +1861,44 @@ select:focus-visible {
   .hud-channel { min-width: 120px; }
 }
 
+@media (max-width: 1320px) {
+  .hud-controls-shell {
+    --liquid-radius: 36px;
+  }
+
+  .hud-controls-inner {
+    min-height: 154px;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    grid-template-areas:
+      "channel transport"
+      "utilities utilities";
+    row-gap: 12px;
+    padding-block: 16px;
+  }
+
+  .hud-channel { grid-area: channel; }
+  .hud-transport {
+    grid-area: transport;
+    justify-self: end;
+  }
+  .hud-utilities {
+    grid-area: utilities;
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+    justify-self: stretch;
+  }
+}
+
 @media (max-width: 1200px) {
   .hud-channel { display: none; }
-  .hud-controls-inner { grid-template-columns: minmax(0, 1fr) max-content; }
-  .hud-transport { justify-self: start; }
+  .hud-controls-inner {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "transport"
+      "utilities";
+  }
+  .hud-transport { justify-self: center; }
   .hud-utilities .player-capture-button,
   .hud-utilities > button[title="Playback statistics"] { display: none; }
 }
@@ -4539,140 +4573,6 @@ body::before,
   transform: translateY(-1px);
 }
 
-.about-bug-report {
-  flex-shrink: 0;
-}
-
-.about-bug-report-header,
-.about-report-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.about-report-limit {
-  flex: 0 0 auto;
-  padding: 4px 9px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--ui-text-secondary);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.about-form-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 160px;
-  gap: 12px;
-}
-
-.about-field {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 7px;
-  color: var(--ui-text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.about-field input,
-.about-field select,
-.about-field textarea {
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--ui-border);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.055);
-  color: var(--ui-text-primary);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  outline: none;
-}
-
-.about-field input,
-.about-field select {
-  height: 38px;
-  padding: 0 11px;
-}
-
-.about-field textarea {
-  min-height: 100px;
-  padding: 10px 11px;
-  resize: vertical;
-  line-height: 1.45;
-}
-
-.about-field input:focus,
-.about-field select:focus,
-.about-field textarea:focus {
-  border-color: rgba(31, 122, 255, 0.68);
-  box-shadow: 0 0 0 3px rgba(31, 122, 255, 0.14);
-}
-
-.about-field input:disabled,
-.about-field select:disabled,
-.about-field textarea:disabled,
-.about-submit-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.58;
-}
-
-.about-report-status {
-  margin: 0;
-  color: var(--ui-text-secondary);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.about-report-status--success {
-  color: rgba(32, 208, 113, 0.86);
-}
-
-.about-report-status--error {
-  color: rgba(255, 91, 118, 0.9);
-}
-
-.about-submit-button {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 38px;
-  padding: 0 15px;
-  border: 1px solid rgba(31, 122, 255, 0.38);
-  border-radius: 10px;
-  background: rgba(31, 122, 255, 0.18);
-  color: var(--ui-text-primary);
-  font-size: 13px;
-  font-weight: 650;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.about-submit-button:not(:disabled):hover {
-  background: rgba(31, 122, 255, 0.26);
-  border-color: rgba(31, 122, 255, 0.55);
-}
-
-@media (max-width: 760px) {
-  .about-form-grid,
-  .about-bug-report-header,
-  .about-report-actions {
-    grid-template-columns: 1fr;
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .about-report-limit,
-  .about-submit-button {
-    width: 100%;
-  }
-}
-
 .about-footer {
   flex-shrink: 0;
   text-align: center;
@@ -4696,4 +4596,224 @@ body::before,
   50% {
     text-shadow: 0 0 8px var(--ui-accent), 0 0 20px var(--ui-accent), 0 0 30px var(--ui-accent);
   }
+}
+/* Refractive liquid glass for the app's floating surfaces. */
+.liquid-glass-filter-definitions {
+  position: fixed;
+  inline-size: 0;
+  block-size: 0;
+  pointer-events: none;
+}
+
+/* Colour beneath the glass gives blur and refraction visible material to work with. */
+.app-shell {
+  background:
+    radial-gradient(660px 440px at -12% 16%, rgba(63, 142, 255, 0.2), transparent 72%),
+    radial-gradient(520px 360px at 44% -16%, rgba(187, 93, 255, 0.14), transparent 72%),
+    var(--ui-canvas) !important;
+}
+
+.liquid-sidebar {
+  contain: layout style;
+  background:
+    linear-gradient(110deg, rgba(255, 255, 255, 0.12), transparent 34%, rgba(103, 181, 255, 0.08) 72%, transparent),
+    color-mix(in srgb, var(--ui-surface-1) 64%, transparent) !important;
+  border-right-color: color-mix(in srgb, var(--ui-border) 68%, rgba(159, 216, 255, 0.54)) !important;
+  box-shadow:
+    inset 1px 0 0 rgba(255, 166, 196, 0.22),
+    inset -1px 0 0 rgba(124, 209, 255, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    10px 0 28px rgba(0, 0, 0, 0.14) !important;
+  backdrop-filter: blur(16px) saturate(155%);
+  -webkit-backdrop-filter: blur(16px) saturate(155%);
+}
+
+.liquid-sidebar::before {
+  display: block;
+  z-index: 0;
+  background:
+    linear-gradient(132deg, rgba(255, 255, 255, 0.18), transparent 28%, rgba(121, 204, 255, 0.08) 66%, transparent),
+    linear-gradient(90deg, rgba(255, 86, 157, 0.055), transparent 16%, transparent 82%, rgba(72, 191, 255, 0.09)),
+    radial-gradient(180px 320px at 100% 48%, rgba(90, 180, 255, 0.09), transparent 72%);
+  opacity: 0.72;
+}
+
+.liquid-sidebar > * {
+  position: relative;
+  z-index: 1;
+}
+
+.player-shell--compact {
+  background:
+    radial-gradient(circle at 50% -20%, rgba(255, 255, 255, 0.12), transparent 36%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.035), rgba(104, 195, 255, 0.06) 48%, rgba(255, 146, 179, 0.075)),
+    rgba(8, 10, 16, 0.06);
+  border-color: rgba(255, 255, 255, 0.44);
+  box-shadow:
+    inset 1px 1px 0 rgba(255, 255, 255, 0.62),
+    inset -1px -1px 0 rgba(126, 210, 255, 0.28),
+    inset 14px 0 30px rgba(89, 185, 255, 0.16),
+    inset -14px 0 30px rgba(255, 116, 160, 0.14),
+    0 24px 60px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(2px) saturate(180%);
+  -webkit-backdrop-filter: blur(2px) saturate(180%);
+}
+
+.hud-glass-layer {
+  background:
+    radial-gradient(circle at 50% -20%, rgba(255, 255, 255, 0.12), transparent 36%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.035), rgba(104, 195, 255, 0.06) 48%, rgba(255, 146, 179, 0.075)),
+    rgba(8, 10, 16, 0.06);
+  border-color: rgba(255, 255, 255, 0.42);
+  box-shadow:
+    inset 1px 1px 0 rgba(255, 255, 255, 0.62),
+    inset -1px -1px 0 rgba(126, 210, 255, 0.28),
+    inset 14px 0 30px rgba(89, 185, 255, 0.16),
+    inset -14px 0 30px rgba(255, 116, 160, 0.14),
+    0 24px 60px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(2px) saturate(180%);
+  -webkit-backdrop-filter: blur(2px) saturate(180%);
+}
+
+.hud-glass-layer::before {
+  opacity: 0.34;
+}
+
+@supports (backdrop-filter: url("#liquid-glass-refraction")) {
+  .liquid-sidebar {
+    backdrop-filter: url("#liquid-glass-refraction") blur(16px) saturate(155%);
+    -webkit-backdrop-filter: url("#liquid-glass-refraction") blur(16px) saturate(155%);
+  }
+  .hud-glass-layer,
+  .player-shell--compact {
+    backdrop-filter: url("#liquid-glass-refraction") blur(2px) saturate(180%);
+    -webkit-backdrop-filter: url("#liquid-glass-refraction") blur(2px) saturate(180%);
+  }
+}
+
+/* Manual GitHub update controls */
+.about-updates {
+  gap: 12px;
+}
+
+.about-update-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 20px;
+  color: var(--ui-text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.about-update-status strong {
+  color: var(--ui-text-primary);
+}
+
+.about-update-status progress {
+  width: min(240px, 100%);
+  height: 7px;
+  accent-color: var(--ui-accent);
+}
+
+.about-update-notes {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  color: var(--ui-text-secondary);
+  font-size: 12px;
+}
+
+.about-update-notes summary {
+  padding: 9px 11px;
+  cursor: pointer;
+  color: var(--ui-text-primary);
+  font-weight: 600;
+}
+
+.about-update-notes pre {
+  max-height: 180px;
+  margin: 0;
+  padding: 0 11px 11px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: inherit;
+  line-height: 1.45;
+}
+
+.about-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.about-version-row {
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.about-version-actions {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.about-submit-button.about-version-update-button {
+  min-height: 26px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+@media (max-width: 480px) {
+  .about-version-row {
+    align-items: flex-start;
+  }
+
+  .about-version-actions {
+    max-width: calc(100% - 86px);
+  }
+
+  .about-version-update-button {
+    white-space: normal;
+    text-align: center;
+  }
+}
+
+.about-update-note {
+  color: var(--ui-text-tertiary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.about-submit-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 15px;
+  border: 1px solid rgba(31, 122, 255, 0.38);
+  border-radius: 10px;
+  background: rgba(31, 122, 255, 0.18);
+  color: var(--ui-text-primary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.about-submit-button:not(:disabled):hover {
+  background: rgba(31, 122, 255, 0.26);
+  border-color: rgba(31, 122, 255, 0.55);
+}
+
+.about-submit-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }

@@ -22,10 +22,13 @@ const dns = require('dns');
 const zlib = require('zlib');
 const { execSync, spawn, spawnSync } = require('child_process');
 const { fileURLToPath } = require('url');
+const { autoUpdater } = require('electron-updater');
 const { normalizeHistoryList } = require('./historyStorage.cjs');
 const { decryptBackup, encryptBackup, mergeImportedData, validateBackupPassword } = require('./electron/backupCore.cjs');
 const { assertWritableDirectory, clampCaptureBounds, createUniqueMediaPath, decodePngDataUrl, sanitizeFilePart, validatePngBuffer } = require('./electron/mediaCore.cjs');
+const { createPortableReplacementPlan, isSafePortableExecutablePath } = require('./electron/portableUpdate.cjs');
 const { createFileSnapshot, migrateLegacyData, restoreFileSnapshot } = require('./electron/storageCore.cjs');
+const { compareVersions, isTrustedGithubAssetUrl, isTrustedGithubRedirectUrl, PROJECT_OWNER, PROJECT_REPOSITORY, selectReleaseCandidate } = require('./electron/updateCore.cjs');
 
 // Keep all application-owned state under LocalAppData. Tests can isolate this
 // with FREAKYIPTV_DATA_DIR without touching the user's real profile.
@@ -48,8 +51,10 @@ const MAX_REDIRECTS = 5;
 const MAX_DISCORD_PACKET_BYTES = 1024 * 1024;
 const MAX_DISCORD_ASSET_LENGTH = 256;
 const MAX_PNG_BYTES = 16 * 1024 * 1024;
+const MAX_UPDATE_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const PROJECT_URL = 'https://github.com/guirosmaninho/freaky-iptv';
 const NEW_ISSUE_URL = 'https://github.com/guirosmaninho/freaky-iptv/issues/new';
+const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${PROJECT_OWNER}/${PROJECT_REPOSITORY}/releases/latest`;
 const ALLOWED_EXTERNAL_URLS = new Set([PROJECT_URL, NEW_ISSUE_URL]);
 const TRUSTED_LOCAL_MEDIA_URLS = new Set();
 
@@ -554,6 +559,334 @@ function assertTrustedIpcSender(event) {
   }
 }
 
+const updateState = {
+  status: 'idle',
+  target: '',
+  version: '',
+  notes: '',
+  asset: null,
+  downloadedPath: '',
+  progress: 0,
+  message: ''
+};
+
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = false;
+
+function getUpdateTarget() {
+  if (!app.isPackaged || process.platform !== 'win32') return '';
+  return process.env.PORTABLE_EXECUTABLE_FILE ? 'portable' : 'nsis';
+}
+
+function getPublicUpdateState() {
+  return {
+    status: updateState.status,
+    target: updateState.target,
+    version: updateState.version,
+    notes: updateState.notes,
+    progress: updateState.progress,
+    message: updateState.message
+  };
+}
+
+function publishUpdateState(nextState) {
+  Object.assign(updateState, nextState);
+  const state = getPublicUpdateState();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('app-update-status', state);
+  }
+  return state;
+}
+
+function resetUpdateState(target) {
+  return publishUpdateState({
+    status: 'checking',
+    target,
+    version: '',
+    notes: '',
+    asset: null,
+    downloadedPath: '',
+    progress: 0,
+    message: ''
+  });
+}
+
+function updateFailure(error) {
+  console.warn('Manual update failed:', error?.message || error);
+  return publishUpdateState({
+    status: 'error',
+    progress: 0,
+    message: 'Nao foi possivel procurar ou transferir a atualizacao. Tente novamente.'
+  });
+}
+
+function getGithubJson(urlText) {
+  if (urlText !== GITHUB_LATEST_RELEASE_URL) {
+    return Promise.reject(new Error('Unexpected update metadata URL.'));
+  }
+
+  return new Promise((resolve, reject) => {
+    const request = https.get(urlText, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': `Freaky-IPTV/${app.getVersion()}`
+      },
+      timeout: 15_000
+    }, (response) => {
+      if (response.statusCode !== 200) {
+        response.resume();
+        reject(new Error(`GitHub release lookup returned ${response.statusCode}.`));
+        return;
+      }
+
+      let bytes = 0;
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        bytes += Buffer.byteLength(chunk);
+        if (bytes > 1024 * 1024) {
+          response.destroy(new Error('GitHub release metadata is too large.'));
+          return;
+        }
+        body += chunk;
+      });
+      response.on('error', reject);
+      response.on('end', () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch {
+          reject(new Error('GitHub returned invalid release metadata.'));
+        }
+      });
+    });
+    request.once('timeout', () => request.destroy(new Error('GitHub release lookup timed out.')));
+    request.once('error', reject);
+  });
+}
+
+function hashFileSha256(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.once('error', reject);
+    stream.once('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+function downloadPortableAsset(asset, destinationPath, onProgress) {
+  if (!asset || !isTrustedGithubAssetUrl(asset.url) || !Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > MAX_UPDATE_DOWNLOAD_BYTES) {
+    return Promise.reject(new Error('Invalid portable update asset.'));
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let received = 0;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      fs.rmSync(destinationPath, { force: true });
+      reject(error);
+    };
+    const output = fs.createWriteStream(destinationPath, { flags: 'wx' });
+    output.once('error', fail);
+
+    const requestAsset = (urlText, redirectCount = 0) => {
+      const trusted = redirectCount === 0
+        ? isTrustedGithubAssetUrl(urlText)
+        : isTrustedGithubRedirectUrl(urlText);
+      if (!trusted || redirectCount > MAX_REDIRECTS) {
+        fail(new Error('Blocked an untrusted update download redirect.'));
+        return;
+      }
+
+      const request = https.get(urlText, {
+        headers: { 'User-Agent': `Freaky-IPTV/${app.getVersion()}` },
+        timeout: 30_000
+      }, (response) => {
+        if ([301, 302, 303, 307, 308].includes(response.statusCode || 0)) {
+          const location = response.headers.location;
+          response.resume();
+          if (!location) {
+            fail(new Error('Update download redirect has no location.'));
+            return;
+          }
+          try {
+            requestAsset(new URL(location, urlText).toString(), redirectCount + 1);
+          } catch {
+            fail(new Error('Update download redirect is invalid.'));
+          }
+          return;
+        }
+        if (response.statusCode !== 200) {
+          response.resume();
+          fail(new Error(`Update download returned ${response.statusCode}.`));
+          return;
+        }
+        const contentLength = Number(response.headers['content-length'] || 0);
+        if (contentLength && contentLength !== asset.size) {
+          response.resume();
+          fail(new Error('Update download size does not match the release metadata.'));
+          return;
+        }
+        response.on('data', (chunk) => {
+          received += chunk.length;
+          if (received > asset.size || received > MAX_UPDATE_DOWNLOAD_BYTES) {
+            response.destroy(new Error('Update download exceeded the expected size.'));
+            return;
+          }
+          onProgress(Math.round((received / asset.size) * 100));
+        });
+        response.once('error', fail);
+        response.pipe(output);
+      });
+      request.once('timeout', () => request.destroy(new Error('Update download timed out.')));
+      request.once('error', fail);
+    };
+
+    output.once('finish', () => {
+      output.close(async () => {
+        try {
+          if (received !== asset.size) throw new Error('Update download is incomplete.');
+          const digest = /^sha256:([a-f0-9]{64})$/i.exec(asset.digest || '');
+          if (digest && (await hashFileSha256(destinationPath)).toLowerCase() !== digest[1].toLowerCase()) {
+            throw new Error('Update download checksum does not match the release metadata.');
+          }
+          if (!settled) {
+            settled = true;
+            resolve(destinationPath);
+          }
+        } catch (error) {
+          fail(error);
+        }
+      });
+    });
+
+    requestAsset(asset.url);
+  });
+}
+
+async function checkForManualUpdate() {
+  const target = getUpdateTarget();
+  if (!target) {
+    return publishUpdateState({
+      status: 'unsupported',
+      target: '',
+      progress: 0,
+      message: 'As atualizacoes estao disponiveis apenas na aplicacao Windows empacotada.'
+    });
+  }
+
+  resetUpdateState(target);
+  try {
+    if (target === 'portable') {
+      const release = await getGithubJson(GITHUB_LATEST_RELEASE_URL);
+      const candidate = selectReleaseCandidate(release, app.getVersion(), 'portable');
+      if (!candidate) {
+        return publishUpdateState({ status: 'up-to-date', message: 'Ja tem a versao mais recente.' });
+      }
+      return publishUpdateState({
+        status: 'available',
+        version: candidate.version,
+        notes: candidate.notes,
+        asset: candidate.asset,
+        message: 'Atualizacao disponivel.'
+      });
+    }
+
+    const result = await autoUpdater.checkForUpdates();
+    const version = result?.updateInfo?.version;
+    if (!version || compareVersions(version, app.getVersion()) <= 0) {
+      return publishUpdateState({ status: 'up-to-date', message: 'Ja tem a versao mais recente.' });
+    }
+    return publishUpdateState({
+      status: 'available',
+      version,
+      notes: typeof result.updateInfo.releaseNotes === 'string' ? result.updateInfo.releaseNotes.slice(0, 16 * 1024) : '',
+      message: 'Atualizacao disponivel.'
+    });
+  } catch (error) {
+    return updateFailure(error);
+  }
+}
+
+async function downloadManualUpdate() {
+  if (updateState.status !== 'available' || !updateState.target) {
+    return publishUpdateState({ status: 'error', message: 'Procure uma atualizacao antes de iniciar a transferencia.' });
+  }
+
+  publishUpdateState({ status: 'downloading', progress: 0, message: 'A transferir a atualizacao...' });
+  try {
+    if (updateState.target === 'portable') {
+      const executablePath = process.env.PORTABLE_EXECUTABLE_FILE || '';
+      if (!isSafePortableExecutablePath(executablePath) || !updateState.asset) {
+        throw new Error('Portable executable path is unavailable.');
+      }
+      const downloadedPath = path.join(path.dirname(executablePath), `.${updateState.asset.name}.download`);
+      fs.rmSync(downloadedPath, { force: true });
+      await downloadPortableAsset(updateState.asset, downloadedPath, (progress) => publishUpdateState({ progress }));
+      return publishUpdateState({
+        status: 'downloaded',
+        downloadedPath,
+        progress: 100,
+        message: 'Atualizacao pronta para instalar.'
+      });
+    }
+
+    await autoUpdater.downloadUpdate();
+    return publishUpdateState({ status: 'downloaded', progress: 100, message: 'Atualizacao pronta para instalar.' });
+  } catch (error) {
+    return updateFailure(error);
+  }
+}
+
+function installManualUpdate() {
+  if (updateState.status !== 'downloaded' || !updateState.target) {
+    return publishUpdateState({ status: 'error', message: 'A atualizacao ainda nao esta pronta para instalar.' });
+  }
+
+  if (updateState.target === 'nsis') {
+    publishUpdateState({ status: 'installing', message: 'A reiniciar para instalar a atualizacao...' });
+    autoUpdater.quitAndInstall(false, true);
+    return getPublicUpdateState();
+  }
+
+  try {
+    const executablePath = process.env.PORTABLE_EXECUTABLE_FILE || '';
+    const replacement = createPortableReplacementPlan({
+      executablePath,
+      downloadedPath: updateState.downloadedPath,
+      pid: process.pid
+    });
+    fs.writeFileSync(replacement.scriptPath, Buffer.concat([
+      Buffer.from([0xFF, 0xFE]),
+      Buffer.from(replacement.script, 'utf16le')
+    ]), { mode: 0o600 });
+    const helper = spawn(process.env.COMSPEC || 'cmd.exe', ['/d', '/s', '/c', replacement.scriptPath], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    helper.unref();
+    publishUpdateState({ status: 'installing', message: 'A reiniciar para instalar a atualizacao...' });
+    app.quit();
+    return getPublicUpdateState();
+  } catch (error) {
+    return updateFailure(error);
+  }
+}
+
+autoUpdater.on('download-progress', (progress) => {
+  if (updateState.target === 'nsis' && updateState.status === 'downloading') {
+    publishUpdateState({ progress: Math.round(progress.percent) });
+  }
+});
+
+autoUpdater.on('error', (error) => {
+  if (updateState.target === 'nsis' && ['checking', 'downloading'].includes(updateState.status)) {
+    updateFailure(error);
+  }
+});
 function registerTrustedHandle(channel, handler) {
   ipcMain.handle(channel, (event, ...args) => {
     assertTrustedIpcSender(event);
@@ -643,6 +976,9 @@ registerTrustedHandle('open-recording-directory', async () => {
 registerTrustedHandle('get-app-version', () => {
   return app.getVersion();
 });
+registerTrustedHandle('check-for-updates', () => checkForManualUpdate());
+registerTrustedHandle('download-update', () => downloadManualUpdate());
+registerTrustedHandle('install-update', () => installManualUpdate());
 
 registerTrustedHandle('get-data-directory', () => {
   return DATA_DIR;
@@ -1017,7 +1353,7 @@ function createGuardedLookup(allowPrivateNetwork) {
 function redactUrlForLogs(urlText) {
   try {
     const parsed = new URL(urlText);
-    return `${parsed.protocol}//${parsed.host}/…`;
+    return `${parsed.protocol}//${parsed.host}/ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦`;
   } catch {
     return '[redacted-url]';
   }
@@ -2059,7 +2395,7 @@ registerTrustedHandle('start-vlc-proxy', async (event, url, options = {}) => {
           '-fflags', '+genpts',
           // 2 MB probe gives FFmpeg enough data to correctly detect Full HD
           // stream parameters (bitrate, codec profile, colour space) without
-          // slowing down startup — copy mode starts output as soon as the first
+          // slowing down startup ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â copy mode starts output as soon as the first
           // keyframe arrives regardless of this value
           '-analyzeduration', '1000000',
           '-probesize', '2097152',

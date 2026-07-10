@@ -9,8 +9,9 @@ const projectRoot = path.resolve(__dirname, '..');
 const releaseDirectory = path.join(projectRoot, 'release');
 const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
 const version = packageJson.version;
-const portablePath = path.join(releaseDirectory, `Freaky IPTV-${version}-Portable-x64.exe`);
-const installerPath = path.join(releaseDirectory, `Freaky IPTV-Setup-${version}-x64.exe`);
+const portablePath = path.join(releaseDirectory, `Freaky-IPTV-${version}-Portable-x64.exe`);
+const installerPath = path.join(releaseDirectory, `Freaky-IPTV-Setup-${version}-x64.exe`);
+const updateMetadataPath = path.join(releaseDirectory, 'latest.yml');
 const unpackedDirectory = path.join(releaseDirectory, 'win-unpacked');
 const unpackedExecutable = path.join(unpackedDirectory, 'Freaky IPTV.exe');
 const unpackedResources = path.join(unpackedDirectory, 'resources');
@@ -100,6 +101,11 @@ async function verifyPackagedAppStarts() {
 async function main() {
   requireFile(portablePath, 50 * 1024 * 1024);
   requireFile(installerPath, 50 * 1024 * 1024);
+  requireFile(updateMetadataPath, 100);
+  const updateMetadata = fs.readFileSync(updateMetadataPath, 'utf8');
+  assert.match(updateMetadata, new RegExp(String.raw`version:\s*${version.replace(/\./g, '\\.')}`));
+  assert.match(updateMetadata, new RegExp(String.raw`(?:^|\n)\s*(?:path|url):\s*Freaky-IPTV-Setup-${version.replace(/\./g, '\\.')}-x64\.exe(?:\n|$)`));
+  assert.match(updateMetadata, /sha512:/);
   requireFile(unpackedExecutable, 1 * 1024 * 1024);
   requireFile(path.join(unpackedResources, 'app.asar'), 1 * 1024 * 1024);
   requireFile(dpapiExecutable, 10 * 1024 * 1024);

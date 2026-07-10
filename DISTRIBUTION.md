@@ -14,8 +14,8 @@ Este comando executa testes, lint, build TypeScript/Vite, publica os helpers .NE
 
 Os ficheiros finais ficam em `release/`:
 
-- `Freaky IPTV-1.0.0-Portable-x64.exe`: aplicação portátil, sem instalação.
-- `Freaky IPTV-Setup-1.0.0-x64.exe`: instalador com atalhos no Ambiente de Trabalho e menu Iniciar.
+- `Freaky-IPTV-1.0.1-Portable-x64.exe`: aplicação portátil, sem instalação.
+- `Freaky-IPTV-Setup-1.0.1-x64.exe`: instalador com atalhos no Ambiente de Trabalho e menu Iniciar.
 
 O utilizador final não precisa de Node.js, .NET, VLC ou FFmpeg. Num Windows limpo de 64 bits basta abrir o portátil ou executar o instalador. A playlist e o EPG continuam a exigir acesso à Internet.
 
@@ -34,11 +34,11 @@ npm run package:win
 
 ## Versões e atualizações
 
-Antes de cada publicação, alterar `version` em `package.json` e `package-lock.json`. O `appId` e a identidade NSIS são estáveis, por isso um instalador com versão superior atualiza a instalação existente sem apagar as definições do utilizador.
+Antes de cada publicacao, alterar `version` em `package.json` e `package-lock.json`. O `appId` e a identidade NSIS sao estaveis, por isso um instalador com versao superior atualiza a instalacao existente sem apagar as definicoes do utilizador.
 
 O processo principal, os atalhos, a janela e os metadados do ficheiro usam o nome `Freaky IPTV`; `electron.exe` não é distribuído como nome da aplicação. A logo `public/cat_icon.png` é convertida para um ícone Windows e incorporada no executável, instalador e atalhos.
 
-As atualizações automáticas não estão ativadas porque exigem um servidor público de releases ou um repositório GitHub de distribuição. Os pacotes estão preparados para atualização manual através do instalador seguinte. Não alterar `build.appId` depois da primeira publicação.
+A app so verifica atualizacoes quando o utilizador seleciona Procurar atualizacoes no About. Cada GitHub Release deve incluir o instalador NSIS, o respetivo `.blockmap`, `latest.yml` e o executavel portatil. O instalador descarrega e instala apos confirmacao; o portatil e substituido no mesmo diretorio quando a app reinicia. Nao alterar `build.appId` depois da primeira publicacao.
 
 ## Assinatura digital
 

@@ -24,12 +24,14 @@ describe('Windows distribution contract', () => {
         target: Array<{ target: string; arch: string[] }>;
       };
       nsis?: {
+        artifactName?: string;
         oneClick?: boolean;
         allowToChangeInstallationDirectory?: boolean;
         createDesktopShortcut?: boolean | 'always';
         createStartMenuShortcut?: boolean;
         deleteAppDataOnUninstall?: boolean;
       };
+      portable?: { artifactName?: string };
     };
   };
 
@@ -51,7 +53,7 @@ describe('Windows distribution contract', () => {
 
   it('builds branded x64 portable and assisted-installer artifacts', () => {
     assert.equal(packageJson.name, 'freaky-iptv');
-    assert.equal(packageJson.version, '1.0.0');
+    assert.equal(packageJson.version, '1.0.1');
     assert.equal(typeof packageJson.author === 'string' ? packageJson.author : packageJson.author?.name, 'Freaky IPTV');
     assert.equal(packageJson.build.appId, 'com.guiro.freakyiptv');
     assert.equal(packageJson.build.productName, 'Freaky IPTV');
@@ -66,6 +68,8 @@ describe('Windows distribution contract', () => {
     ]);
     assert.equal(packageJson.build.win.forceCodeSigning, false);
     assert.equal(packageJson.build.nsis?.oneClick, false);
+    assert.equal(packageJson.build.nsis?.artifactName, 'Freaky-IPTV-Setup-${version}-${arch}.${ext}');
+    assert.equal(packageJson.build.portable?.artifactName, 'Freaky-IPTV-${version}-Portable-${arch}.${ext}');
     assert.equal(packageJson.build.nsis?.allowToChangeInstallationDirectory, true);
     assert.equal(packageJson.build.nsis?.createDesktopShortcut, true);
     assert.equal(packageJson.build.nsis?.createStartMenuShortcut, true);
@@ -102,5 +106,10 @@ describe('Windows distribution contract', () => {
     const verifierSource = readProjectFile('scripts/verify-windows-package.cjs');
     assert.match(verifierSource, /process\.env\.CODEX_CI/);
     assert.match(verifierSource, /GPU process isn't usable/);
+  });
+
+  it('preserves the standard backdrop-filter declaration in production CSS', () => {
+    const viteConfig = readProjectFile('vite.config.ts');
+    assert.match(viteConfig, /cssMinify:\s*false/);
   });
 });

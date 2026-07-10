@@ -270,6 +270,16 @@ export interface StorageInfo {
   migrationStatus: MigrationStatus;
 }
 
+export type UpdateStatus = 'idle' | 'unsupported' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
+
+export interface UpdateCheckResult {
+  status: UpdateStatus;
+  target: '' | 'nsis' | 'portable';
+  version: string;
+  notes: string;
+  progress: number;
+  message: string;
+}
 // Extend global window interface for Electron preload IPC handlers
 declare global {
   interface Window {
@@ -286,6 +296,10 @@ declare global {
       selectRecordingDirectory: () => Promise<string | null>;
       openRecordingDirectory: () => Promise<{ ok: boolean; path?: string; error?: string }>;
       getAppVersion: () => Promise<string>;
+      checkForUpdates: () => Promise<UpdateCheckResult>;
+      downloadUpdate: () => Promise<UpdateCheckResult>;
+      installUpdate: () => Promise<UpdateCheckResult>;
+      onUpdateStatus: (callback: (state: UpdateCheckResult) => void) => () => void;
       getDataDirectory: () => Promise<string>;
       openDataDirectory: () => Promise<{ ok: boolean; path?: string; error?: string }>;
       openExternalUrl: (url: string) => Promise<boolean>;

@@ -13,6 +13,14 @@ contextBridge.exposeInMainWorld('electron', {
   selectRecordingDirectory: () => ipcRenderer.invoke('select-recording-directory'),
   openRecordingDirectory: () => ipcRenderer.invoke('open-recording-directory'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+  onUpdateStatus: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('app-update-status', listener);
+    return () => ipcRenderer.removeListener('app-update-status', listener);
+  },
   getDataDirectory: () => ipcRenderer.invoke('get-data-directory'),
   openDataDirectory: () => ipcRenderer.invoke('open-data-directory'),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),

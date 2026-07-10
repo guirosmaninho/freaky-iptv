@@ -10,6 +10,25 @@
   </head>
   <body>
     <div id="root"></div>
+    <svg class="liquid-glass-filter-definitions" aria-hidden="true" focusable="false" width="0" height="0">
+      <filter id="liquid-glass-refraction" color-interpolation-filters="sRGB">
+        <feTurbulence
+          type="fractalNoise"
+          baseFrequency="0.009 0.018"
+          numOctaves="2"
+          seed="42"
+          result="liquid-noise"
+        />
+        <feColorMatrix in="liquid-noise" type="saturate" values="0" result="liquid-displacement" />
+        <feDisplacementMap in="SourceGraphic" in2="liquid-displacement" scale="5.5" xChannelSelector="R" yChannelSelector="G" result="liquid-refracted" />
+        <feOffset in="liquid-refracted" dx="-1.2" result="liquid-red-offset" />
+        <feColorMatrix in="liquid-red-offset" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.28 0" result="liquid-red-fringe" />
+        <feOffset in="liquid-refracted" dx="1.2" result="liquid-blue-offset" />
+        <feColorMatrix in="liquid-blue-offset" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 0.28 0" result="liquid-blue-fringe" />
+        <feBlend in="liquid-refracted" in2="liquid-red-fringe" mode="screen" result="liquid-red-shifted" />
+        <feBlend in="liquid-red-shifted" in2="liquid-blue-fringe" mode="screen" />
+      </filter>
+    </svg>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
