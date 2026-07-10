@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://github.com/guirosmaninho/freaky-iptv/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/guirosmaninho/freaky-iptv/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="https://github.com/guirosmaninho/freaky-iptv/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/guirosmaninho/freaky-iptv" /></a>
-  <a href="https://github.com/guirosmaninho/freaky-iptv/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/guirosmaninho/freaky-iptv?include_prereleases&label=release" /></a>
+  <a href="https://github.com/guirosmaninho/freaky-iptv/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/guirosmaninho/freaky-iptv?label=release" /></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6.svg" />
   <img alt="Electron" src="https://img.shields.io/badge/Electron-42-47848f.svg" />
