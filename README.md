@@ -25,6 +25,12 @@ It is built with React, TypeScript, Electron, Vite, .NET 8, LibVLC, and
 FFmpeg. Freaky IPTV does not include, sell, proxy, or recommend IPTV
 subscriptions, channels, streams, playlists, or EPG data.
 
+## 🚀 Download
+
+Click the button below to get the latest stable release for Windows (Installer or Portable):
+
+[![Download Latest Release](https://img.shields.io/github/v/release/guirosmaninho/freaky-iptv?label=Download%20Latest%20Release&style=for-the-badge&color=brightgreen)](https://github.com/guirosmaninho/freaky-iptv/releases/latest)
+
 ## Features
 
 - M3U playlist and XMLTV guide support.
