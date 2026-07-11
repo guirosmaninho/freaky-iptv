@@ -26,8 +26,7 @@ interface VideoPlayerProps {
   onPrevChannel: () => void;
   sessionId: string;
   onRecordSessionBytes: (sessionId: string, bytes: number, source: 'network' | 'direct-estimate' | 'proxy') => void;
-  isExpanded: boolean;
-  onToggleExpand: () => void;
+  collapseRequest: number;
   currentProgram: EPGProgram | null;
   currentProgress: number;
   onPlayChannel: (channel: Channel) => void;
@@ -128,8 +127,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onPrevChannel,
   sessionId,
   onRecordSessionBytes,
-  isExpanded,
-  onToggleExpand,
+  collapseRequest,
   currentProgram,
   currentProgress,
   onPlayChannel,
@@ -147,6 +145,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const isLocalProxyPlaybackRef = useRef(false);
   const playbackRelayRef = useRef<{ id: string; url: string; sourceUrl: string } | null>(null);
   const controlsHideTimerRef = useRef<number | null>(null);
+  const fullscreenTransitionTimerRef = useRef<number | null>(null);
+  const fullscreenTransitioningRef = useRef(false);
+  const isFullscreenRef = useRef(false);
+  const immersiveControlsVisibleRef = useRef(true);
+  const statsTickInFlightRef = useRef(false);
   const mpegtsSpeedKbpsRef = useRef<number | null>(null);
   const connectionSpeedKbpsRef = useRef(0);
   const adaptiveBufferLevelRef = useRef<AdaptiveBufferLevel>(0);
@@ -157,7 +160,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [bufferingText, setBufferingText] = useState('Idle');
   const [showStats, setShowStats] = useState(false);
   const [isQualityOpen, setIsQualityOpen] = useState(false);
+  const [expandedPresentation, setExpandedPresentation] = useState({ request: collapseRequest, expanded: false });
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFullscreenTransitioning, setIsFullscreenTransitioning] = useState(false);
   const [isPictureInPicture, setIsPictureInPicture] = useState(false);
   const [areImmersiveControlsVisible, setAreImmersiveControlsVisible] = useState(true);
   const [recordingState, setRecordingState] = useState<RecordingState>({ status: 'idle', mode: null, path: null, startedAtUtc: null, bytes: 0, error: null });
@@ -187,7 +192,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   });
 
   const [preMuteVolume, setPreMuteVolume] = useState(80);
+  const isExpanded = expandedPresentation.request === collapseRequest && expandedPresentation.expanded;
   const isImmersive = isExpanded || isFullscreen;
+
+  useEffect(() => {
+    isFullscreenRef.current = isFullscreen;
+  }, [isFullscreen]);
+
+  useEffect(() => {
+    immersiveControlsVisibleRef.current = areImmersiveControlsVisible;
+  }, [areImmersiveControlsVisible]);
 
   useEffect(() => {
     onRecordSessionBytesRef.current = onRecordSessionBytes;
@@ -299,12 +313,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, []);
 
   const revealImmersiveControls = useCallback(() => {
-    setAreImmersiveControlsVisible(true);
+    if (!immersiveControlsVisibleRef.current) {
+      immersiveControlsVisibleRef.current = true;
+      setAreImmersiveControlsVisible(true);
+    }
     clearControlsHideTimer();
 
     if (!isImmersive) return;
 
     controlsHideTimerRef.current = window.setTimeout(() => {
+      immersiveControlsVisibleRef.current = false;
       setAreImmersiveControlsVisible(false);
       controlsHideTimerRef.current = null;
     }, IMMERSIVE_CONTROLS_AUTO_HIDE_MS);
@@ -314,6 +332,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     clearControlsHideTimer();
 
     if (!isImmersive) {
+      immersiveControlsVisibleRef.current = true;
       return;
     }
 
@@ -775,6 +794,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (!isCurrentAttempt(attemptId)) return;
         console.error('MPEGTS error:', type, detail, info);
         const errorText = `${String(type)} ${String(detail)}`.toLowerCase();
+        if (errorText.includes('network') && !hasStartedPlayback && tryProxyRecovery('Retrying through compatibility video engine...')) {
+          return;
+        }
         if (errorText.includes('network')) {
           markPlaybackFailed('Stream network error');
           return;
@@ -896,6 +918,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       startProxyTrafficPolling(attemptId);
     };
 
+    const tryProxyRecovery = (message: string) => {
+      if (currentProxyMode === 'copy' && !hardwareProxyAttempted) {
+        void startVlcProxyPlayback('Retrying with GPU video engine...', false, 'hardware');
+        return true;
+      }
+      if (currentProxyMode === 'hardware' && !copyProxyAttempted) {
+        void startVlcProxyPlayback(message, false, 'copy');
+        return true;
+      }
+      if (!copyProxyAttempted) {
+        void startVlcProxyPlayback(message, false, 'copy');
+        return true;
+      }
+      if (!hardwareProxyAttempted) {
+        void startVlcProxyPlayback('Retrying with GPU video engine...', false, 'hardware');
+        return true;
+      }
+      return false;
+    };
+
     const startHlsPlayback = async () => {
       const attemptId = activeAttemptId;
       setBufferingText('Opening stream');
@@ -941,6 +983,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           if (!data.fatal) return;
 
           console.error('Fatal HLS error:', data);
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR && !hasStartedPlayback && tryProxyRecovery('Retrying through compatibility video engine...')) {
+            return;
+          }
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
             markPlaybackFailed('Stream network error');
             return;
@@ -993,7 +1038,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
 
     const setupPlayer = () => {
-      startInitialEngine(chooseInitialPlaybackEngine({ sourceUrl, streamKind, qualityLabel, storage: window.localStorage }));
+      startInitialEngine(chooseInitialPlaybackEngine({
+        sourceUrl,
+        streamKind,
+        qualityLabel,
+        platform: window.electron.platform,
+        storage: window.localStorage
+      }));
     };
 
     const jumpBufferGaps = () => {
@@ -1133,6 +1184,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         return;
       }
 
+      if (error.code === MediaError.MEDIA_ERR_NETWORK && !hasStartedPlayback && tryProxyRecovery('Retrying through compatibility video engine...')) {
+        return;
+      }
+
       if (error.code === MediaError.MEDIA_ERR_NETWORK) {
         markPlaybackFailed('Stream network error');
         return;
@@ -1167,16 +1222,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video.addEventListener('error', handleError);
     video.addEventListener('progress', handleProgress);
 
-    // Aggressive PTS Gap Skipper for proxy streams
+    // Recover small PTS gaps without competing with the decoder. This runs
+    // less often and only after the first frame is playing; during a display
+    // change (for example when HDMI is attached) Chromium can briefly report
+    // transient buffered ranges and repeated seeks/play() calls make the
+    // interruption much worse.
     const gapSkipperInterval = setInterval(() => {
-      if (video) {
-        const prevTime = video.currentTime;
-        jumpBufferGaps();
-        if (video.currentTime !== prevTime) {
-          video.play().catch(e => console.warn('Play interrupted:', e));
-        }
+      if (!video || !hasStartedPlayback || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+      const prevTime = video.currentTime;
+      jumpBufferGaps();
+      if (video.currentTime !== prevTime && video.paused) {
+        video.play().catch(e => console.warn('Play interrupted:', e));
       }
-    }, 500);
+    }, 1000);
 
     setupPlayer();
 
@@ -1208,9 +1266,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let lastTime = Date.now();
     let lastBytes = bytesRef.current;
 
-    const timer = setInterval(async () => {
+    const tick = async () => {
       const video = videoRef.current;
-      if (!video || video.paused || video.ended) return;
+      if (!video || video.paused || video.ended || statsTickInFlightRef.current) return;
+      statsTickInFlightRef.current = true;
+
+      try {
 
       const now = Date.now();
       const timeDiffSec = (now - lastTime) / 1000;
@@ -1296,7 +1357,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         const percent = Math.min(100, Math.round((bufferHealth / 10) * 100));
         
         if (isBuffering) {
-          setBufferingText(`Buffering ${percent}%`);
+          const nextBufferingText = `Buffering ${percent}%`;
+          setBufferingText(current => current === nextBufferingText ? current : nextBufferingText);
         }
       }
 
@@ -1338,6 +1400,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           audioCodec
         }));
       }
+      } finally {
+        statsTickInFlightRef.current = false;
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void tick();
     }, showStats || isBuffering ? 1000 : 5000);
 
     return () => clearInterval(timer);
@@ -1368,13 +1437,47 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   const handleFullscreenToggle = async () => {
+    if (fullscreenTransitioningRef.current) return;
+    fullscreenTransitioningRef.current = true;
+    setIsFullscreenTransitioning(true);
+    const requestedFullscreen = !isFullscreenRef.current;
+    if (requestedFullscreen && !immersiveControlsVisibleRef.current) {
+      immersiveControlsVisibleRef.current = true;
+      setAreImmersiveControlsVisible(true);
+    }
+
+    if (fullscreenTransitionTimerRef.current !== null) {
+      window.clearTimeout(fullscreenTransitionTimerRef.current);
+    }
+    fullscreenTransitionTimerRef.current = window.setTimeout(() => {
+      fullscreenTransitionTimerRef.current = null;
+      fullscreenTransitioningRef.current = false;
+      setIsFullscreenTransitioning(false);
+    }, 4_000);
+
     try {
-      const active = await window.electron.setWindowFullscreen(!isFullscreen);
-      setIsFullscreen(active);
+      await window.electron.setWindowFullscreen(requestedFullscreen);
     } catch (error) {
+      if (fullscreenTransitionTimerRef.current !== null) {
+        window.clearTimeout(fullscreenTransitionTimerRef.current);
+        fullscreenTransitionTimerRef.current = null;
+      }
+      fullscreenTransitioningRef.current = false;
+      setIsFullscreenTransitioning(false);
       console.error('Fullscreen toggle failed:', error);
     }
   };
+
+  const toggleExpanded = useCallback(() => {
+    if (!isExpanded && !immersiveControlsVisibleRef.current) {
+      immersiveControlsVisibleRef.current = true;
+      setAreImmersiveControlsVisible(true);
+    }
+    setExpandedPresentation(current => ({
+      request: collapseRequest,
+      expanded: current.request === collapseRequest ? !current.expanded : true
+    }));
+  }, [collapseRequest, isExpanded]);
 
   const renderQualitySelector = (mode: 'compact' | 'immersive') => {
     if (!channel.variants || channel.variants.length <= 1) return null;
@@ -1454,11 +1557,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, []);
 
-  // Keep renderer state synchronized with native Electron fullscreen changes.
+  // Commit the renderer change only when macOS has completed its native
+  // fullscreen transition. This prevents a competing layout pass mid-animation.
   useEffect(() => {
-    const removeListener = window.electron.onWindowFullscreenChange(setIsFullscreen);
+    const settleFullscreenTransition = (active: boolean) => {
+      if (fullscreenTransitionTimerRef.current !== null) {
+        window.clearTimeout(fullscreenTransitionTimerRef.current);
+        fullscreenTransitionTimerRef.current = null;
+      }
+      fullscreenTransitioningRef.current = false;
+      isFullscreenRef.current = active;
+      if (active && !immersiveControlsVisibleRef.current) {
+        immersiveControlsVisibleRef.current = true;
+        setAreImmersiveControlsVisible(true);
+      }
+      setIsFullscreenTransitioning(false);
+      setIsFullscreen(active);
+    };
+    const removeListener = window.electron.onWindowFullscreenChange(settleFullscreenTransition);
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && isFullscreen) {
+      if (event.key === 'Escape' && isFullscreenRef.current) {
         void window.electron.setWindowFullscreen(false);
       }
     };
@@ -1466,8 +1584,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       removeListener();
       document.removeEventListener('keydown', handleEscape);
+      if (fullscreenTransitionTimerRef.current !== null) {
+        window.clearTimeout(fullscreenTransitionTimerRef.current);
+      }
     };
-  }, [isFullscreen]);
+  }, []);
 
   const copyDiagnostics = useCallback(() => {
     const diagnostic = redactPlaybackDiagnostic(JSON.stringify({
@@ -1532,12 +1653,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         className={`player-video ${isImmersive ? 'player-video--immersive' : 'player-video--compact'}`}
         tabIndex={0}
         aria-label={`${channel.name} live video`}
-        onClick={isImmersive ? revealImmersiveControls : onToggleExpand}
+        onClick={isImmersive ? revealImmersiveControls : toggleExpanded}
         onKeyDown={(event) => {
           if (event.key !== ' ' && event.key !== 'Enter') return;
           event.preventDefault();
           if (isImmersive) revealImmersiveControls();
-          else onToggleExpand();
+          else toggleExpanded();
         }}
       />
 
@@ -1546,7 +1667,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <button
           type="button"
           className="player-preview-spacer"
-          onClick={onToggleExpand}
+          onClick={toggleExpanded}
           title="Expand player inside app"
           aria-label={`Expand ${channel.name} player`}
         />
@@ -1721,7 +1842,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </svg>
             </button>
 
-            <button onClick={handleFullscreenToggle} className="player-ghost-button" title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+            <button onClick={handleFullscreenToggle} className="player-ghost-button" title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'} disabled={isFullscreenTransitioning} aria-busy={isFullscreenTransitioning}>
               {isFullscreen ? (
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M10 14l-7 7" />
@@ -1733,7 +1854,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               )}
             </button>
 
-            <button onClick={onToggleExpand} className="player-ghost-button" title="Collapse player">
+            <button onClick={toggleExpanded} className="player-ghost-button" title="Collapse player">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polyline points="6 9 12 15 18 9" />
               </svg>
@@ -1863,6 +1984,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               onClick={handleFullscreenToggle}
               className="player-ghost-button"
               title="Fullscreen"
+              disabled={isFullscreenTransitioning}
+              aria-busy={isFullscreenTransitioning}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" />
@@ -1871,7 +1994,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
             {/* Expand Toggle */}
             <button 
-              onClick={onToggleExpand}
+              onClick={toggleExpanded}
               className="player-ghost-button"
               title="Expand Player"
             >

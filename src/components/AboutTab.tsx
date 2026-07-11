@@ -45,8 +45,13 @@ export const AboutTab: React.FC = () => {
     }
   };
 
-  const updateAction = update.status === 'available'
-    ? { label: `Descarregar atualização ${update.version}`, action: () => runUpdateAction(window.electron.downloadUpdate) }
+  const updateAction = update.status === 'available' && update.target === 'release-page'
+    ? { label: 'Abrir Releases no GitHub', action: () => runUpdateAction(async () => {
+      await window.electron.openReleasePage();
+      return { ...update, message: 'As Releases do GitHub foram abertas no navegador.' };
+    }) }
+    : update.status === 'available'
+      ? { label: `Descarregar atualização ${update.version}`, action: () => runUpdateAction(window.electron.downloadUpdate) }
     : update.status === 'downloaded'
       ? { label: 'Reiniciar e instalar', action: () => runUpdateAction(window.electron.installUpdate) }
       : { label: isUpdateBusy ? 'A procurar atualizações…' : 'Procurar atualizações', action: () => runUpdateAction(window.electron.checkForUpdates) };
@@ -121,7 +126,7 @@ export const AboutTab: React.FC = () => {
         <div>
           <h2 id="about-updates-title" className="about-card-title">Atualizações</h2>
           <p className="about-card-text">
-            Procure novas versões publicadas no GitHub. A transferência e instalação só começam após a sua confirmação.
+            Procure novas versões publicadas no GitHub. No macOS, uma nova versão abre as Releases no navegador; no Windows, a transferência e instalação só começam após a sua confirmação.
           </p>
         </div>
         <div className="about-update-status" role="status" aria-live="polite">
@@ -140,6 +145,9 @@ export const AboutTab: React.FC = () => {
         <div className="about-update-actions">
           {update.target === 'portable' && update.status === 'downloaded' && (
             <span className="about-update-note">A app será encerrada e o executável portátil será substituído no mesmo directório.</span>
+          )}
+          {update.target === 'release-page' && update.status === 'available' && (
+            <span className="about-update-note">Descarregue o DMG adequado ao processador do seu Mac nas Releases do GitHub.</span>
           )}
         </div>
       </section>

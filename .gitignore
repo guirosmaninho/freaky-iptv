@@ -12,8 +12,9 @@ coverage/
 *.css.map
 
 # Native build output
-dpapi-runtime/
-libvlc-proxy-runtime/
+native-runtime/
+native-runtime-package/
+.ffmpeg-target
 dpapi-helper/bin/
 dpapi-helper/obj/
 libvlc-proxy-helper/bin/
@@ -30,6 +31,7 @@ System.Security.Cryptography.ProtectedData.dll
 
 # Packaging and test output
 build-resources/cat_icon.ico
+build-resources/cat_icon.icns
 build/
 out/
 release/

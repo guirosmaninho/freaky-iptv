@@ -139,6 +139,12 @@ test('chooses hardware proxy first for high-demand MPEG-TS channels', () => {
     qualityLabel: '4K'
   }), 'proxy-hardware');
   assert.equal(chooseInitialPlaybackEngine({
+    sourceUrl: 'http://example.test/macos-fhd.ts',
+    streamKind: 'mpegts',
+    qualityLabel: 'FHD',
+    platform: 'darwin'
+  }), 'mpegts');
+  assert.equal(chooseInitialPlaybackEngine({
     sourceUrl: 'http://example.test/sd.ts',
     streamKind: 'mpegts',
     qualityLabel: 'SD'

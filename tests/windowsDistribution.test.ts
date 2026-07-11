@@ -38,29 +38,27 @@ describe('Windows distribution contract', () => {
   it('publishes both native helpers as self-contained Windows x64 runtimes', () => {
     assert.match(packageJson.scripts['build:dpapi-helper'], /-r win-x64/);
     assert.match(packageJson.scripts['build:dpapi-helper'], /--self-contained true/);
-    assert.match(packageJson.scripts['build:dpapi-helper'], /-o dpapi-runtime/);
+    assert.match(packageJson.scripts['build:dpapi-helper'], /-o native-runtime\/win-x64\/dpapi/);
     assert.match(packageJson.scripts['build:libvlc-proxy'], /-r win-x64/);
     assert.match(packageJson.scripts['build:libvlc-proxy'], /--self-contained true/);
-    assert.ok(packageJson.build.files.includes('dpapi-runtime/**'));
-    assert.ok(packageJson.build.files.includes('libvlc-proxy-runtime/**'));
-    assert.ok(packageJson.build.asarUnpack.includes('dpapi-runtime/**'));
-    assert.ok(packageJson.build.asarUnpack.includes('libvlc-proxy-runtime/**'));
+    assert.ok(packageJson.build.files.includes('native-runtime-package/**'));
+    assert.ok(packageJson.build.asarUnpack.includes('native-runtime-package/**'));
 
     const mainSource = readProjectFile('main.cjs');
-    assert.match(mainSource, /path\.join\('dpapi-runtime', 'dpapi-helper\.exe'\)/);
-    assert.match(mainSource, /path\.join\('libvlc-proxy-runtime', 'LibVlcProxyHelper\.exe'\)/);
+    assert.match(mainSource, /getNativeRuntimePath\('dpapi', 'dpapi-helper\.exe'\)/);
+    assert.match(mainSource, /getNativeRuntimePath\('libvlc-proxy', executableName\)/);
   });
 
   it('builds branded x64 portable and assisted-installer artifacts', () => {
     assert.equal(packageJson.name, 'freaky-iptv');
-    assert.equal(packageJson.version, '1.0.1');
+    assert.equal(packageJson.version, '1.1.0');
     assert.equal(typeof packageJson.author === 'string' ? packageJson.author : packageJson.author?.name, 'Freaky IPTV');
     assert.equal(packageJson.build.appId, 'com.guiro.freakyiptv');
     assert.equal(packageJson.build.productName, 'Freaky IPTV');
     assert.equal(packageJson.build.executableName, 'Freaky IPTV');
-    assert.equal(packageJson.build.electronDist, 'node_modules/electron/dist');
     assert.equal(packageJson.build.win.icon, 'build-resources/cat_icon.ico');
-    assert.match(packageJson.scripts.build, /npm run prepare:windows-icon/);
+    assert.equal(packageJson.scripts.build, 'npm run build:win');
+    assert.match(packageJson.scripts['build:win'], /npm run prepare:windows-icon/);
     assert.match(packageJson.scripts['prepare:windows-icon'], /create-windows-icon\.cjs/);
     assert.deepEqual(packageJson.build.win.target, [
       { target: 'nsis', arch: ['x64'] },

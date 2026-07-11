@@ -16,7 +16,7 @@ it('keeps application updates manual and confines downloads to trusted GitHub re
     build?: { publish?: Array<{ provider?: string; owner?: string; repo?: string }> };
   };
 
-  assert.equal(packageJson.version, '1.0.1');
+  assert.equal(packageJson.version, '1.1.0');
   assert.ok(packageJson.dependencies?.['electron-updater']);
   assert.deepEqual(packageJson.build?.publish, [{ provider: 'github', owner: 'guirosmaninho', repo: 'freaky-iptv' }]);
   assert.match(mainSource, /autoDownload\s*=\s*false/);
@@ -28,8 +28,13 @@ it('keeps application updates manual and confines downloads to trusted GitHub re
   assert.match(preloadSource, /checkForUpdates/);
   assert.match(preloadSource, /downloadUpdate/);
   assert.match(preloadSource, /installUpdate/);
+  assert.match(preloadSource, /openReleasePage/);
   assert.match(typeSource, /UpdateCheckResult/);
   assert.match(aboutSource, /Procurar atualizações/);
+  assert.match(mainSource, /process\.platform === 'darwin'/);
+  assert.match(mainSource, /target === 'release-page'/);
+  assert.match(mainSource, /openReleasePage\(\)/);
+  assert.match(aboutSource, /Abrir Releases no GitHub/);
 });
 
 it('requires updater metadata in Windows release verification', () => {

@@ -185,15 +185,15 @@ describe('Electron security contract', () => {
     assert.match(mainSource, /Content-Security-Policy'[\s\S]*frame-ancestors 'none'/);
     assert.match(html, /worker-src 'self' blob:/);
     assert.equal(packageJson.build?.asar, true);
-    assert.ok(packageJson.build?.asarUnpack?.includes('dpapi-runtime/**'));
-    assert.ok(packageJson.build?.asarUnpack?.includes('libvlc-proxy-runtime/**'));
+    assert.ok(packageJson.build?.asarUnpack?.includes('native-runtime-package/**'));
   });
 
   it('uses the FreakyIPTV data directory and exposes bounded media and backup IPC', () => {
     const mainSource = readProjectFile('main.cjs');
     const preloadSource = readProjectFile('preload.cjs');
 
-    assert.match(mainSource, /path\.join\(LOCAL_APP_DATA, 'FreakyIPTV'\)/);
+    assert.match(mainSource, /resolvePlatformDirectories\(/);
+    assert.match(mainSource, /getNativeRuntimePath\(/);
     assert.match(mainSource, /migrateLegacyData\(/);
     assert.match(mainSource, /registerTrustedHandle\('export-backup'/);
     assert.match(mainSource, /registerTrustedHandle\('import-backup'/);
