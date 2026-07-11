@@ -12,20 +12,22 @@ function resolvePlatformDirectories({ platform, env = process.env, appDataPath, 
   }
 
   if (platform === 'darwin') {
-    const applicationSupport = appDataPath || path.join(env.HOME || '', 'Library', 'Application Support');
-    const movies = videosPath || path.join(env.HOME || '', 'Movies');
+    const platformPath = path.posix;
+    const applicationSupport = appDataPath || platformPath.join(env.HOME || '', 'Library', 'Application Support');
+    const movies = videosPath || platformPath.join(env.HOME || '', 'Movies');
     return {
-      dataDir: env.FREAKYIPTV_DATA_DIR || path.join(applicationSupport, 'FreakyIPTV'),
+      dataDir: env.FREAKYIPTV_DATA_DIR || platformPath.join(applicationSupport, 'FreakyIPTV'),
       legacyDir: '',
-      recordingDir: env.FREAKYIPTV_RECORDINGS_DIR || path.join(movies, 'Freaky IPTV')
+      recordingDir: env.FREAKYIPTV_RECORDINGS_DIR || platformPath.join(movies, 'Freaky IPTV')
     };
   }
 
-  const dataRoot = appDataPath || env.XDG_DATA_HOME || path.join(env.HOME || '', '.local', 'share');
+  const platformPath = path.posix;
+  const dataRoot = appDataPath || env.XDG_DATA_HOME || platformPath.join(env.HOME || '', '.local', 'share');
   return {
-    dataDir: env.FREAKYIPTV_DATA_DIR || path.join(dataRoot, 'FreakyIPTV'),
+    dataDir: env.FREAKYIPTV_DATA_DIR || platformPath.join(dataRoot, 'FreakyIPTV'),
     legacyDir: '',
-    recordingDir: env.FREAKYIPTV_RECORDINGS_DIR || path.join(videosPath || env.HOME || dataRoot, 'Freaky IPTV')
+    recordingDir: env.FREAKYIPTV_RECORDINGS_DIR || platformPath.join(videosPath || env.HOME || dataRoot, 'Freaky IPTV')
   };
 }
 
