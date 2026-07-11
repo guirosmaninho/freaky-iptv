@@ -1222,16 +1222,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     video.addEventListener('error', handleError);
     video.addEventListener('progress', handleProgress);
 
-    // Aggressive PTS Gap Skipper for proxy streams
+    // Recover small PTS gaps without competing with the decoder. This runs
+    // less often and only after the first frame is playing; during a display
+    // change (for example when HDMI is attached) Chromium can briefly report
+    // transient buffered ranges and repeated seeks/play() calls make the
+    // interruption much worse.
     const gapSkipperInterval = setInterval(() => {
-      if (video) {
-        const prevTime = video.currentTime;
-        jumpBufferGaps();
-        if (video.currentTime !== prevTime) {
-          video.play().catch(e => console.warn('Play interrupted:', e));
-        }
+      if (!video || !hasStartedPlayback || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+      const prevTime = video.currentTime;
+      jumpBufferGaps();
+      if (video.currentTime !== prevTime && video.paused) {
+        video.play().catch(e => console.warn('Play interrupted:', e));
       }
-    }, 500);
+    }, 1000);
 
     setupPlayer();
 

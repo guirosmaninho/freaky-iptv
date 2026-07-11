@@ -110,7 +110,10 @@ async function main() {
   requireFile(executable, 10 * 1024);
   requireFile(path.join(resources, 'app.asar'), 1 * 1024 * 1024);
   requireFile(path.join(nativeRuntime, 'runtime.json'));
-  requireFile(helper, 100 * 1024);
+  // The self-contained .NET publish is architecture-dependent; the x64
+  // helper is just under 100 KiB while arm64 is slightly larger. The
+  // architecture and `file` checks below are the meaningful guarantees.
+  requireFile(helper, 64 * 1024);
   requireFile(ffmpeg, 10 * 1024 * 1024);
   assert.equal(JSON.parse(fs.readFileSync(path.join(nativeRuntime, 'runtime.json'), 'utf8')).runtime, `darwin-${arch}`);
   assertArchitecture(executable);

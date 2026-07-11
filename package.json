@@ -1,7 +1,7 @@
 {
   "name": "freaky-iptv",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Desktop IPTV player with programme guide, favourites and playback statistics.",
   "author": "Freaky IPTV",
   "license": "MIT",

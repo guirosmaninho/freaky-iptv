@@ -23,6 +23,18 @@ test('does not animate decoded video geometry or blur the fullscreen HUD', () =>
 
   assert.match(videoRule, /transition:\s*none/);
   assert.doesNotMatch(videoRule, /transition:\s*all/);
+  assert.match(css, /\.player-video--immersive[\s\S]*image-rendering:\s*auto/);
+  assert.doesNotMatch(css, /\.player-video--immersive[\s\S]*image-rendering:\s*high-quality/);
   assert.match(finalHudRule, /backdrop-filter:\s*none/);
   assert.match(finalHudRule, /-webkit-backdrop-filter:\s*none/);
+});
+
+test('does not fight the decoder with gap seeks during startup or display changes', () => {
+  const playerSource = readProjectFile('src/components/VideoPlayer.tsx');
+  const mainSource = readProjectFile('main.cjs');
+
+  assert.match(playerSource, /!hasStartedPlayback \|\| video\.readyState < HTMLMediaElement\.HAVE_CURRENT_DATA/);
+  assert.match(playerSource, /video\.currentTime !== prevTime && video\.paused/);
+  assert.match(playerSource, /\}, 1000\);/);
+  assert.match(mainSource, /backgroundThrottling:\s*process\.platform !== 'darwin'/);
 });

@@ -2591,7 +2591,11 @@ function createWindow() {
       webSecurity: true,
       webviewTag: false,
       autoplayPolicy: 'no-user-gesture-required',
-      backgroundThrottling: true
+      // A macOS window can be temporarily treated as background while its
+      // surface moves to an HDMI display or a Space changes. Keeping the
+      // renderer live prevents timer/video frame throttling during that
+      // transition. Windows retains the previous behaviour.
+      backgroundThrottling: process.platform !== 'darwin'
     }
   });
 

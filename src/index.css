@@ -1470,8 +1470,10 @@ select:focus-visible {
   object-fit: contain;
   cursor: default;
   contain: layout paint;
-  /* Use highest-quality scaling when the video element is resized */
-  image-rendering: high-quality;
+  /* Keep scaling on Chromium's video compositor. `high-quality` asks the
+     image pipeline for an expensive resample and can make an external
+     HDMI/4K surface drop frames while the window is being resized. */
+  image-rendering: auto;
 }
 
 .player-preview-spacer {
