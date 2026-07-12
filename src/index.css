@@ -1392,7 +1392,8 @@ select:focus-visible {
   z-index: 9999;
 }
 
-.player-shell--controls-hidden {
+.player-shell--fullscreen.player-shell--controls-hidden,
+.player-shell--fullscreen.player-shell--controls-hidden .player-video--immersive {
   cursor: none;
 }
 
@@ -1868,40 +1869,34 @@ select:focus-visible {
   }
 
   .hud-controls-inner {
-    min-height: 154px;
-    grid-template-columns: minmax(0, 1fr) max-content;
-    grid-template-areas:
-      "channel transport"
-      "utilities utilities";
-    row-gap: 12px;
-    padding-block: 16px;
+    grid-template-columns: minmax(0, 1fr) max-content minmax(0, 1fr);
+    gap: 12px;
+    padding: 16px 20px;
   }
 
-  .hud-channel { grid-area: channel; }
   .hud-transport {
-    grid-area: transport;
-    justify-self: end;
+    justify-self: center;
   }
   .hud-utilities {
-    grid-area: utilities;
-    width: 100%;
-    min-width: 0;
-    justify-content: center;
-    justify-self: stretch;
+    justify-content: flex-end;
+    justify-self: end;
+    gap: 8px;
   }
+
+  .hud-utilities .player-capture-button,
+  .hud-utilities > button[title="Playback statistics"] { display: none; }
+
+  .player-range--wide { width: 104px; }
 }
 
 @media (max-width: 1200px) {
   .hud-channel { display: none; }
   .hud-controls-inner {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "transport"
-      "utilities";
+    grid-template-columns: 1fr max-content 1fr;
   }
-  .hud-transport { justify-self: center; }
-  .hud-utilities .player-capture-button,
-  .hud-utilities > button[title="Playback statistics"] { display: none; }
+  .hud-transport { grid-column: 2; }
+  .hud-utilities { grid-column: 3; }
+  .player-range--wide { display: none; }
 }
 
 .player-volume {

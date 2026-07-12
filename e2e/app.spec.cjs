@@ -303,6 +303,17 @@ test('zaps with arrow keys, wraps channels, and preserves full app mode', async 
       const groups = [...hud.querySelectorAll('.hud-channel, .hud-transport, .hud-utilities')].filter(isVisible);
       const controls = [...hud.querySelectorAll('button, input')].filter(isVisible);
 
+      const groupCenters = groups.map((group) => {
+        const rect = group.getBoundingClientRect();
+        return rect.top + rect.height / 2;
+      });
+      if (Math.max(...groupCenters) - Math.min(...groupCenters) > 1) {
+        errors.push('HUD groups are split across multiple rows');
+      }
+      if (hud.getBoundingClientRect().height > 120) {
+        errors.push('HUD is taller than a single control row');
+      }
+
       for (let left = 0; left < groups.length; left += 1) {
         for (let right = left + 1; right < groups.length; right += 1) {
           if (intersects(groups[left].getBoundingClientRect(), groups[right].getBoundingClientRect())) {
@@ -350,6 +361,12 @@ test('zaps with arrow keys, wraps channels, and preserves full app mode', async 
 test('enters native fullscreen and returns without losing playback', async () => {
   await page.locator('button[title="Fullscreen"]').click();
   await expect.poll(() => electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen())).toBe(true);
+  await page.mouse.move(10, 10);
+  await expect(page.locator('.player-shell')).toHaveClass(/player-shell--controls-hidden/, { timeout: 5000 });
+  await expect(page.locator('.player-video--immersive')).toHaveCSS('cursor', 'none');
+  await page.mouse.move(640, 360);
+  await expect(page.locator('.player-shell')).not.toHaveClass(/player-shell--controls-hidden/);
+  await expect(page.locator('.player-video--immersive')).toHaveCSS('cursor', 'default');
   await page.locator('button[title="Exit fullscreen"]').click();
   await expect.poll(() => electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen())).toBe(false);
   await expect(page.locator('.player-shell')).toBeVisible();

@@ -51,7 +51,7 @@ describe('Windows distribution contract', () => {
 
   it('builds branded x64 portable and assisted-installer artifacts', () => {
     assert.equal(packageJson.name, 'freaky-iptv');
-    assert.equal(packageJson.version, '1.1.0');
+    assert.equal(packageJson.version, '1.1.1');
     assert.equal(typeof packageJson.author === 'string' ? packageJson.author : packageJson.author?.name, 'Freaky IPTV');
     assert.equal(packageJson.build.appId, 'com.guiro.freakyiptv');
     assert.equal(packageJson.build.productName, 'Freaky IPTV');
