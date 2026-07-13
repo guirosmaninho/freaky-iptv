@@ -25,6 +25,7 @@ const { fileURLToPath } = require('url');
 const { autoUpdater } = require('electron-updater');
 const { normalizeHistoryList } = require('./historyStorage.cjs');
 const { decryptBackup, encryptBackup, mergeImportedData, validateBackupPassword } = require('./electron/backupCore.cjs');
+const { getDiscordIpcPaths } = require('./electron/discordRpcCore.cjs');
 const { assertWritableDirectory, clampCaptureBounds, createUniqueMediaPath, decodePngDataUrl, sanitizeFilePart, validatePngBuffer } = require('./electron/mediaCore.cjs');
 const { createPortableReplacementPlan, isSafePortableExecutablePath } = require('./electron/portableUpdate.cjs');
 const { createFileSnapshot, migrateLegacyData, restoreFileSnapshot } = require('./electron/storageCore.cjs');
@@ -2827,25 +2828,22 @@ function connectDiscordRpc() {
   if (discordRpcSocket || isDiscordConnected || isConnecting || !currentDiscordSettings.enabled) return;
 
   isConnecting = true;
-  let pipeIndex = 0;
+  const ipcPaths = getDiscordIpcPaths({ platform: process.platform, env: process.env });
+  let candidateIndex = 0;
 
   function tryNextPipe() {
     if (!currentDiscordSettings.enabled) { isConnecting = false; return; }
-    if (pipeIndex >= 10) {
+    if (candidateIndex >= ipcPaths.length) {
       isConnecting = false;
       scheduleDiscordReconnect();
       return;
     }
 
-    const pipePath = process.platform === 'win32'
-      ? `\\\\.\\pipe\\discord-ipc-${pipeIndex}`
-      : `${process.env.XDG_RUNTIME_DIR || process.env.TMPDIR || process.env.TMP || '/tmp'}/discord-ipc-${pipeIndex}`;
-
-    const socket = net.createConnection(pipePath);
+    const socket = net.createConnection(ipcPaths[candidateIndex]);
 
     const handleConnectionError = () => {
       socket.destroy();
-      pipeIndex++;
+      candidateIndex++;
       tryNextPipe();
     };
 
