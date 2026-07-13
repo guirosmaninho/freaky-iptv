@@ -130,3 +130,4 @@ Desktop.ini
 *.stackdump
 *.pid
 /.agents
+/libvlc-proxy-runtime
