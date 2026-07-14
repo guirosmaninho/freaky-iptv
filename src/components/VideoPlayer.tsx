@@ -39,6 +39,7 @@ const IMMERSIVE_CONTROLS_AUTO_HIDE_MS = 2600;
 const NETWORK_HISTORY_SAMPLE_COUNT = 36;
 const ADAPTIVE_STALL_WINDOW_MS = 45_000;
 const ADAPTIVE_STALL_THRESHOLD = 3;
+const ADAPTIVE_BUFFER_DECAY_MS = 10 * 60 * 1000;
 
 const MPEGTS_BUFFER_PROFILES: Record<AdaptiveBufferLevel, {
   stashInitialSize: number;
@@ -154,6 +155,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const connectionSpeedKbpsRef = useRef(0);
   const adaptiveBufferLevelRef = useRef<AdaptiveBufferLevel>(0);
   const stallEventsRef = useRef<number[]>([]);
+  const lastAdaptiveStallAtRef = useRef<number | null>(null);
+  const mediaNoticeTimerRef = useRef<number | null>(null);
   
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
@@ -212,9 +215,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [onPlaybackEvent]);
 
   useEffect(() => {
-    void loadMpegTsModule();
-    void loadHlsModule();
-  }, []);
+    // Buffer pressure belongs to one source only; a problematic channel must
+    // not make the next channel start with a permanently inflated buffer.
+    adaptiveBufferLevelRef.current = 0;
+    stallEventsRef.current = [];
+    lastAdaptiveStallAtRef.current = null;
+
+    const decayTimer = window.setInterval(() => {
+      const lastStallAt = lastAdaptiveStallAtRef.current;
+      if (!lastStallAt || Date.now() - lastStallAt < ADAPTIVE_BUFFER_DECAY_MS) return;
+      if (adaptiveBufferLevelRef.current > 0) {
+        adaptiveBufferLevelRef.current = (adaptiveBufferLevelRef.current - 1) as AdaptiveBufferLevel;
+        lastAdaptiveStallAtRef.current = Date.now();
+      }
+    }, 60_000);
+
+    return () => window.clearInterval(decayTimer);
+  }, [channel.streamUrl]);
 
   useEffect(() => {
     void window.electron.getRecordingState().then(setRecordingState);
@@ -231,8 +248,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [recordingState.status]);
 
   const showMediaNotice = useCallback((message: string) => {
+    if (mediaNoticeTimerRef.current !== null) window.clearTimeout(mediaNoticeTimerRef.current);
     setMediaNotice(message);
-    window.setTimeout(() => setMediaNotice(''), 3500);
+    mediaNoticeTimerRef.current = window.setTimeout(() => {
+      mediaNoticeTimerRef.current = null;
+      setMediaNotice('');
+    }, 3500);
+  }, []);
+
+  useEffect(() => () => {
+    if (mediaNoticeTimerRef.current !== null) window.clearTimeout(mediaNoticeTimerRef.current);
   }, []);
 
   const toggleRecording = useCallback(async () => {
@@ -1094,6 +1119,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const increaseAdaptiveBufferIfNeeded = () => {
       const now = Date.now();
+      lastAdaptiveStallAtRef.current = now;
       const nextBufferState = nextAdaptiveBufferState({
         now,
         currentLevel: adaptiveBufferLevelRef.current,

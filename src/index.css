@@ -4682,10 +4682,6 @@ body::before,
     backdrop-filter: url("#liquid-glass-refraction") blur(16px) saturate(155%);
     -webkit-backdrop-filter: url("#liquid-glass-refraction") blur(16px) saturate(155%);
   }
-  .player-shell--compact {
-    backdrop-filter: url("#liquid-glass-refraction") blur(2px) saturate(180%);
-    -webkit-backdrop-filter: url("#liquid-glass-refraction") blur(2px) saturate(180%);
-  }
 }
 
 /* Manual GitHub update controls */
@@ -4814,3 +4810,43 @@ body::before,
   cursor: not-allowed;
   opacity: 0.58;
 }
+/* Library and diagnostics */
+.recordings-list { display: grid; gap: 12px; margin-top: 18px; }
+.recording-entry { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px; }
+.recording-entry small { display: block; margin-top: 4px; color: var(--text-secondary); }
+.recording-player { display: grid; gap: 12px; padding: 14px; margin: 18px 0; }
+.recording-player > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.recording-player-video { width: 100%; max-height: min(58vh, 620px); background: #000; border-radius: var(--radius-control); }
+.recordings-library { box-sizing: border-box; width: min(1120px, calc(100% - 48px)); height: 100%; margin: 0 auto; padding: clamp(28px, 4vw, 52px) 0 72px; overflow-y: auto; }
+.recordings-header { display: flex; align-items: end; justify-content: space-between; gap: 32px; margin-bottom: 28px; }
+.recordings-header h2 { margin: 5px 0 7px; font-size: clamp(2rem, 4vw, 3rem); line-height: .98; letter-spacing: -.055em; text-wrap: balance; }
+.recordings-header p:not(.recordings-kicker) { max-width: 55ch; margin: 0; color: var(--text-secondary); }
+.recordings-kicker { margin: 0; color: var(--accent-primary); font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+.recordings-toolbar { display: flex; gap: 10px; flex: none; }
+.recordings-message { margin: 0 0 18px; color: var(--text-secondary); }
+.recording-player { margin: 0 0 28px; padding: 16px; border: 1px solid rgba(103, 162, 255, .25); border-radius: 20px; background: linear-gradient(145deg, rgba(31, 42, 66, .9), rgba(17, 20, 29, .9)); box-shadow: 0 20px 52px rgba(4, 13, 31, .34); }
+.recording-player-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 3px 2px 14px; }
+.recording-player-header span { display: block; color: var(--text-secondary); font-size: 12px; }
+.recording-player-header strong { display: block; max-width: 70ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recording-player-video { display: block; aspect-ratio: 16 / 9; max-height: min(58vh, 620px); object-fit: contain; }
+.recording-player-loading { padding: 10px 2px 0; color: var(--text-secondary); }
+.recording-compatibility-link { margin-top: 12px; padding: 0; border: 0; background: transparent; color: var(--accent-primary); font: inherit; cursor: pointer; }
+.recordings-grid { display: grid; gap: 10px; }
+.recording-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 20px; padding: 13px 14px; border: 1px solid rgba(255,255,255,.075); border-radius: 14px; background: rgba(255,255,255,.025); transition: background .2s ease, border-color .2s ease, transform .2s ease; }
+.recording-card:hover, .recording-card.is-playing { border-color: rgba(97, 161, 255, .33); background: rgba(71, 123, 200, .09); transform: translateY(-1px); }
+.recording-card-main { display: flex; min-width: 0; align-items: center; gap: 14px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.recording-play-icon { display: grid; width: 34px; height: 34px; flex: none; place-items: center; border-radius: 10px; background: rgba(67, 139, 249, .17); color: #83b7ff; font-size: 12px; transition: transform .2s ease, background .2s ease; }
+.recording-card-main:hover .recording-play-icon { background: var(--accent-primary); color: white; transform: scale(1.05); }
+.recording-card-copy { display: grid; min-width: 0; gap: 3px; }
+.recording-card-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
+.recording-card-copy small { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.recording-card-actions { display: flex; gap: 8px; }
+.recording-card-actions .btn-secondary, .recording-delete-button { min-height: 34px; padding: 0 12px; font-size: 12px; }
+.recording-delete-button { border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.recording-delete-button:hover { color: #ff9b9b; }
+.recordings-empty { display: grid; justify-items: start; gap: 6px; padding: 50px 24px; border: 1px dashed rgba(255,255,255,.13); border-radius: 16px; color: var(--text-secondary); }
+.recordings-empty strong { color: var(--text-primary); }
+.app-main-surface--compact-player .recordings-library { padding-bottom: 210px; }
+@media (max-width: 720px) { .recordings-library { width: min(100% - 28px, 1120px); } .recordings-header, .recording-card { grid-template-columns: 1fr; align-items: start; } .recordings-header { display: grid; } .recording-card-actions { padding-left: 48px; } .recording-player-header strong { max-width: 44vw; } }
+.diagnostics-json { max-height: 520px; overflow: auto; padding: 16px; border-radius: var(--radius-control); background: var(--bg-deep); color: var(--text-secondary); white-space: pre-wrap; }
+.tv-guide-reminder-button { margin-top: 8px; font-size: 11px; }

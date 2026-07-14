@@ -15,7 +15,11 @@
   "homepage": "https://github.com/guirosmaninho/freaky-iptv#readme",
   "main": "main.cjs",
   "type": "module",
+  "engines": {
+    "node": ">=24.15 <25"
+  },
   "scripts": {
+    "preinstall": "node scripts/verify-node-version.cjs",
     "dev": "npm run build:host && concurrently --kill-others-on-fail \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "clean:native": "node scripts/clean-native-runtimes.cjs",
     "build:native": "npm run build:native:win",

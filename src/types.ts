@@ -8,6 +8,8 @@ export interface Channel {
   duration: number;
   attributes: Record<string, string>;
   variants?: Channel[];
+  /** Changes whenever any rendered channel detail or variant changes. */
+  contentRevision?: string;
 }
 
 
@@ -45,6 +47,7 @@ export interface EpgGuide {
 }
 
 export type UiTheme = 'system' | 'light' | 'dark';
+export type AppLanguage = 'system' | 'pt-PT' | 'en';
 export type RecordingMode = 'source-mkv';
 export type AdaptiveBufferLevel = 0 | 1 | 2;
 export type PlaybackStatus = 'idle' | 'starting' | 'buffering' | 'recovering' | 'playing' | 'failed';
@@ -63,8 +66,11 @@ export interface AppSettings {
   historyRetentionDays?: number;
   discordRpcEnabled?: boolean;
   discordShowChannel?: boolean;
+  discordShowProgram?: boolean;
+  discordShowArtwork?: boolean;
   discordClientId?: string;
   appearance?: UiTheme;
+  language?: AppLanguage;
   recordingDirectory?: string;
   recordingMode?: RecordingMode;
   openedReviewIds?: string[];
@@ -267,7 +273,72 @@ export interface StorageInfo {
   historyBytes: number;
   cacheUpdatedAtUtc: string;
   historyUpdatedAtUtc: string;
+  databaseBytes?: number;
+  databaseHealth?: { healthy: boolean; databaseBytes: number } | null;
+  recoveryNotice?: { message: string; quarantinedPath?: string } | null;
   migrationStatus: MigrationStatus;
+}
+
+export type AppErrorAction = 'retry' | 'open-settings' | 'copy-diagnostics' | 'switch-engine' | 'choose-folder' | 'refresh-sources';
+
+export interface AppError {
+  code: string;
+  message: string;
+  severity: 'warning' | 'error';
+  actions: AppErrorAction[];
+  diagnosticId?: string;
+}
+
+export interface SettingsEnvelope {
+  revision: number;
+  settings: AppSettings;
+  recoveryNotices: string[];
+}
+
+export type SettingsPatch = Partial<Pick<AppSettings,
+  'volume' | 'appearance' | 'language' | 'discordRpcEnabled' | 'discordShowChannel' |
+  'discordShowProgram' | 'discordShowArtwork'>>;
+
+export interface Reminder {
+  id: string;
+  channelId: string;
+  programmeStartUtc: string;
+  programmeTitle: string;
+  leadMinutes: 0 | 5 | 10 | 15 | 30;
+  notifiedAtUtc?: string;
+}
+
+export interface RecordingEntry {
+  id: string;
+  name: string;
+  bytes: number;
+  modifiedAtUtc: string;
+  status: 'ready' | 'missing' | 'failed';
+}
+
+export interface VideoPresentationSettings {
+  fit: 'auto' | 'contain' | 'cover' | '4:3' | '16:9' | '21:9';
+  zoom: number;
+  deinterlace: 'auto' | 'off' | 'bwdif';
+  hdr: 'auto' | 'tone-map-sdr';
+}
+
+export interface VideoCapabilityMatrix {
+  deinterlace: boolean;
+  hdrToneMap: boolean;
+}
+
+export interface CastDevice {
+  id: string;
+  name: string;
+  protocol: 'airplay' | 'google-cast' | 'dlna';
+  capabilities: string[];
+}
+
+export interface CastSessionState {
+  status: 'idle' | 'discovering' | 'connecting' | 'playing' | 'error';
+  deviceId?: string;
+  error?: string;
 }
 
 export type UpdateStatus = 'idle' | 'unsupported' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
@@ -287,13 +358,17 @@ declare global {
       platform: string;
       loadSettings: () => Promise<AppSettings>;
       saveSettings: (settings: AppSettings) => Promise<boolean>;
+      patchSettings: (patch: SettingsPatch) => Promise<{ ok: boolean; settings?: AppSettings; revision?: number; error?: string }>;
       loadCache: () => Promise<CacheSnapshot | null>;
       saveCache: (snapshot: CacheSnapshot) => Promise<boolean>;
       loadHistory: () => Promise<WatchSession[]>;
       saveHistory: (sessions: WatchSession[]) => Promise<boolean>;
       getStorageInfo: () => Promise<StorageInfo>;
       clearCache: () => Promise<boolean>;
-      clearHistory: () => Promise<boolean>;
+    clearHistory: () => Promise<boolean>;
+    loadReminders: () => Promise<Reminder[]>;
+    saveReminders: (reminders: Reminder[]) => Promise<boolean>;
+    onReminderNotification: (callback: (reminder: Reminder & { openChannel?: boolean; title?: string; body?: string }) => void) => () => void;
       selectRecordingDirectory: () => Promise<string | null>;
       openRecordingDirectory: () => Promise<{ ok: boolean; path?: string; error?: string }>;
       getAppVersion: () => Promise<string>;
@@ -313,7 +388,14 @@ declare global {
       copyText: (value: string) => Promise<boolean>;
       startSourceRecording: (request: { sourceUrl: string; channelName: string; relayId?: string | null }) => Promise<RecordingResult>;
       stopSourceRecording: () => Promise<RecordingState>;
-      getRecordingState: () => Promise<RecordingState>;
+    getRecordingState: () => Promise<RecordingState>;
+    listRecordings: () => Promise<RecordingEntry[]>;
+    getRecordingPlaybackUrl: (id: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
+    startRecordingPlayback: (id: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
+    renameRecording: (request: { id: string; name: string }) => Promise<{ ok: boolean; error?: string }>;
+    deleteRecording: (id: string) => Promise<{ ok: boolean; error?: string }>;
+    getDiagnostics: () => Promise<Record<string, unknown>>;
+    exportDiagnostics: () => Promise<{ ok: boolean; canceled?: boolean }>;
       onRecordingStateChange: (callback: (state: RecordingState) => void) => () => void;
       downloadText: (url: string) => Promise<string>;
       startVlcProxy: (url: string, options?: { mode?: 'copy' | 'hardware'; relayId?: string | null }) => Promise<{ ok: boolean; url?: string; errorCode?: PlaybackFailureCode; error?: string }>;

@@ -12,10 +12,11 @@ interface LiveGridProps {
   favoriteChannelIds: Set<string>;
   onPlayChannel: (channel: Channel) => void;
   onToggleFavorite: (channel: Channel) => void;
-  getChannelEpgInfo: (channel: Channel) => { program: EPGProgram | null; progress: number };
+  getChannelEpgInfo: (channel: Channel) => { program: EPGProgram | null; progress: number; upcoming?: EPGProgram[] };
   initialCategory?: string;
   showFavoritesOnly?: boolean;
   qualityMappings?: Record<string, string>;
+  nowMs?: number;
 }
 
 const LiveGridComponent: React.FC<LiveGridProps> = ({
@@ -28,17 +29,23 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
   getChannelEpgInfo,
   initialCategory = 'All channels',
   showFavoritesOnly = false,
-  qualityMappings
+  qualityMappings,
+  nowMs = 0
 }) => {
   const [selectedCategory, setSelectedCategory] = useState(initialCategory);
   const [searchText, setSearchText] = useState('');
   const [density, setDensity] = useState<'compact' | 'comfortable' | 'large'>('comfortable');
+  const [nowOnly, setNowOnly] = useState(false);
+  const [startingSoonMinutes, setStartingSoonMinutes] = useState<0 | 15 | 30 | 60>(0);
   const deferredSearchText = useDeferredValue(searchText);
   const normalizedSearchText = useMemo(
     () => deferredSearchText.toLowerCase().trim(),
     [deferredSearchText]
   );
-  const filterKey = `${selectedCategory}\u0000${normalizedSearchText}\u0000${showFavoritesOnly}`;
+  const effectiveSelectedCategory = selectedCategory === 'All channels' || categories.includes(selectedCategory)
+    ? selectedCategory
+    : 'All channels';
+  const filterKey = `${effectiveSelectedCategory}\u0000${normalizedSearchText}\u0000${showFavoritesOnly}\u0000${nowOnly}\u0000${startingSoonMinutes}`;
   const [pagination, setPagination] = useState({ filterKey, visibleCount: INITIAL_VISIBLE_COUNT });
   const visibleCount = pagination.filterKey === filterKey ? pagination.visibleCount : INITIAL_VISIBLE_COUNT;
   
@@ -66,7 +73,7 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
         continue;
       }
 
-      if (!showFavoritesOnly && selectedCategory !== 'All channels' && channel.groupTitle !== selectedCategory) {
+      if (!showFavoritesOnly && effectiveSelectedCategory !== 'All channels' && channel.groupTitle !== effectiveSelectedCategory) {
         continue;
       }
 
@@ -79,11 +86,22 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
         }
       }
 
+      const epg = (nowOnly || startingSoonMinutes > 0) ? getChannelEpgInfo(channel) : null;
+      if (nowOnly && !epg?.program) continue;
+      if (startingSoonMinutes > 0) {
+        const threshold = nowMs + startingSoonMinutes * 60_000;
+        const startsSoon = epg?.upcoming?.some(programme => {
+          const start = Date.parse(programme.startUtc);
+          return Number.isFinite(start) && start >= nowMs && start <= threshold;
+        });
+        if (!startsSoon) continue;
+      }
+
       result.push(channel);
     }
 
     return result;
-  }, [channels, getChannelEpgInfo, isChannelFavorite, normalizedSearchText, selectedCategory, showFavoritesOnly]);
+  }, [channels, effectiveSelectedCategory, getChannelEpgInfo, isChannelFavorite, normalizedSearchText, nowMs, nowOnly, showFavoritesOnly, startingSoonMinutes]);
 
   const visibleChannels = useMemo(
     () => filteredChannels.slice(0, visibleCount),
@@ -146,7 +164,7 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
             <label htmlFor="live-category" className="field-label">Category</label>
             <select
               id="live-category"
-              value={selectedCategory}
+              value={effectiveSelectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
               className="text-input"
               style={{
@@ -174,6 +192,8 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
 
         {/* Search and density controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+          <label className="settings-switch-row live-filter-switch"><input type="checkbox" checked={nowOnly} onChange={(event) => setNowOnly(event.target.checked)} /><span><strong>On now</strong></span></label>
+          <label className="field-label">Starting soon<select className="text-input" value={startingSoonMinutes} onChange={(event) => setStartingSoonMinutes(Number(event.target.value) as 0 | 15 | 30 | 60)}><option value={0}>Any time</option><option value={15}>15 minutes</option><option value={30}>30 minutes</option><option value={60}>60 minutes</option></select></label>
           <div className="segmented-control density-control" aria-label="Channel card density">
             {(['compact', 'comfortable', 'large'] as const).map(option => (
               <button

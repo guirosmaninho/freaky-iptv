@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('electron', {
   platform: process.platform,
   loadSettings: () => ipcRenderer.invoke('load-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
+  patchSettings: (patch) => ipcRenderer.invoke('patch-settings', patch),
   loadCache: () => ipcRenderer.invoke('load-cache'),
   saveCache: (snapshot) => ipcRenderer.invoke('save-cache', snapshot),
   loadHistory: () => ipcRenderer.invoke('load-history'),
@@ -11,6 +12,13 @@ contextBridge.exposeInMainWorld('electron', {
   getStorageInfo: () => ipcRenderer.invoke('get-storage-info'),
   clearCache: () => ipcRenderer.invoke('clear-cache'),
   clearHistory: () => ipcRenderer.invoke('clear-history'),
+  loadReminders: () => ipcRenderer.invoke('load-reminders'),
+  saveReminders: (reminders) => ipcRenderer.invoke('save-reminders', reminders),
+  onReminderNotification: (callback) => {
+    const listener = (_event, reminder) => callback(reminder);
+    ipcRenderer.on('reminder-notification', listener);
+    return () => ipcRenderer.removeListener('reminder-notification', listener);
+  },
   selectRecordingDirectory: () => ipcRenderer.invoke('select-recording-directory'),
   openRecordingDirectory: () => ipcRenderer.invoke('open-recording-directory'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
@@ -35,6 +43,13 @@ contextBridge.exposeInMainWorld('electron', {
   startSourceRecording: (request) => ipcRenderer.invoke('start-source-recording', request),
   stopSourceRecording: () => ipcRenderer.invoke('stop-source-recording'),
   getRecordingState: () => ipcRenderer.invoke('get-recording-state'),
+  listRecordings: () => ipcRenderer.invoke('list-recordings'),
+  getRecordingPlaybackUrl: (id) => ipcRenderer.invoke('get-recording-playback-url', id),
+  startRecordingPlayback: (id) => ipcRenderer.invoke('start-recording-playback', id),
+  renameRecording: (request) => ipcRenderer.invoke('rename-recording', request),
+  deleteRecording: (id) => ipcRenderer.invoke('delete-recording', id),
+  getDiagnostics: () => ipcRenderer.invoke('get-diagnostics'),
+  exportDiagnostics: () => ipcRenderer.invoke('export-diagnostics'),
   onRecordingStateChange: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('recording-state-changed', listener);

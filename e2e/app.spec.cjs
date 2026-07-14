@@ -148,9 +148,13 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await electronApp?.close();
-  await new Promise((resolve) => server?.close(resolve));
-  if (fixtureRoot) fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  try {
+    await electronApp?.evaluate(({ app }) => app.quit());
+    await electronApp?.close();
+  } finally {
+    await new Promise((resolve) => server?.close(resolve));
+    if (fixtureRoot) fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 test('renders the main screens at supported window sizes', async () => {
@@ -248,7 +252,7 @@ test('checks for updates only after an explicit About action', async () => {
   expect(versionControlLayout.buttonHeight).toBeLessThanOrEqual(28);
   await expect(updateButton).toBeEnabled();
   await updateButton.click();
-  await expect(page.getByRole('status')).toContainText('aplicacao Windows empacotada');
+  await expect(page.getByRole('status')).toContainText('aplicacao empacotada');
   await expect(updateButton).toHaveAccessibleName('Procurar atualizações');
 });
 test('zaps with arrow keys, wraps channels, and preserves full app mode', async () => {
@@ -269,7 +273,7 @@ test('zaps with arrow keys, wraps channels, and preserves full app mode', async 
     return { alpha, backdropFilter: style.backdropFilter };
   });
   expect(compactGlass.alpha).toBeLessThanOrEqual(0.1);
-  expect(compactGlass.backdropFilter).toContain('liquid-glass-refraction');
+  expect(compactGlass.backdropFilter).toBe('none');
 
   await page.getByRole('button', { name: /Expand News One player/ }).click();
   await expect(page.locator('.player-shell')).toHaveClass(/player-shell--expanded/);
@@ -281,7 +285,7 @@ test('zaps with arrow keys, wraps channels, and preserves full app mode', async 
     return { alpha, backdropFilter: style.backdropFilter };
   });
   expect(hudGlass.alpha).toBeLessThanOrEqual(0.1);
-  expect(hudGlass.backdropFilter).toContain('liquid-glass-refraction');
+  expect(hudGlass.backdropFilter).toBe('none');
 
   for (const viewportWidth of [1920, 1500, 1366, 1280, 1200, 1024]) {
     await page.setViewportSize({ width: viewportWidth, height: 720 });

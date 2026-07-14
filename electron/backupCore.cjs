@@ -2,7 +2,7 @@ const crypto = require('node:crypto');
 const { promisify } = require('node:util');
 
 const scrypt = promisify(crypto.scrypt);
-const BACKUP_VERSION = 1;
+const BACKUP_VERSION = 2;
 const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 
 function validateBackupPassword(password) {
@@ -31,7 +31,7 @@ async function encryptBackup(payload, password) {
 
 function assertBackupEnvelope(envelope) {
   if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) throw new Error('Backup could not be opened.');
-  if (envelope.format !== 'FreakyIPTVBackup' || envelope.version !== BACKUP_VERSION) throw new Error('Backup could not be opened.');
+  if (envelope.format !== 'FreakyIPTVBackup' || ![1, BACKUP_VERSION].includes(envelope.version)) throw new Error('Backup could not be opened.');
   if (envelope.kdf?.name !== 'scrypt' || envelope.cipher?.name !== 'aes-256-gcm') throw new Error('Backup could not be opened.');
   if (envelope.kdf.N !== 16384 || envelope.kdf.r !== 8 || envelope.kdf.p !== 1) throw new Error('Backup could not be opened.');
   for (const value of [envelope.kdf.salt, envelope.cipher.iv, envelope.cipher.tag, envelope.ciphertext]) {
@@ -41,10 +41,11 @@ function assertBackupEnvelope(envelope) {
 
 function validateBackupPayload(payload) {
   try {
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.schemaVersion !== 1) throw new Error();
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload) || ![1, 2].includes(payload.schemaVersion)) throw new Error();
     if (!payload.settings || typeof payload.settings !== 'object' || Array.isArray(payload.settings)) throw new Error();
     if (!Array.isArray(payload.history) || payload.history.length > 100000) throw new Error();
     if (payload.history.some(item => !item || typeof item !== 'object' || Array.isArray(item))) throw new Error();
+    if (payload.schemaVersion === 2 && payload.reminders !== undefined && (!Array.isArray(payload.reminders) || payload.reminders.length > 10000)) throw new Error();
     for (const key of ['playlistUrl', 'epgUrl', 'recordingDirectory']) {
       const value = payload.settings[key];
       if (value !== undefined && (typeof value !== 'string' || value.length > 16384)) throw new Error();
@@ -123,7 +124,8 @@ function mergeImportedData(current, imported) {
     seenHistory.add(key);
     history.push(item);
   }
-  return { settings, history };
+  const reminders = Array.isArray(imported?.reminders) ? imported.reminders : [];
+  return { settings, history, reminders };
 }
 
 module.exports = {

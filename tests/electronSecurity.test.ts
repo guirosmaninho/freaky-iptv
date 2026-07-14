@@ -77,7 +77,7 @@ describe('Electron security contract', () => {
     assert.match(source, /const allowPrivateNetwork = false/);
     assert.match(source, /requestRawUrl\(new URL\(location, parsedUrl\)\.toString\(\), redirectCount \+ 1/);
     assert.match(source, /pipeUrl\(new URL\(location, upstreamUrl\)\.toString\(\), redirectCount \+ 1/);
-    assert.match(source, /startPlaybackRelayUpstream\(relay, new URL\(location, upstreamUrl\)\.toString\(\), redirectCount \+ 1\)/);
+    assert.match(source, /openStreamingHttpRequest\(currentUrl, \{\s*allowPrivateNetwork: false,\s*maxRedirects: MAX_REDIRECTS,\s*resolveTarget: resolveNetworkTarget/);
     assert.doesNotMatch(source, /options\.allowPrivateNetwork/);
     assert.match(source, /function startUpstreamRelay\(sourceUrl\)/);
     assert.match(source, /registerTrustedHandle\('start-playback-relay'/);
@@ -202,7 +202,7 @@ describe('Electron security contract', () => {
     assert.match(mainSource, /registerTrustedHandle\('start-playback-relay'/);
     assert.match(mainSource, /registerTrustedHandle\('stop-playback-relay'/);
     assert.match(mainSource, /registerTrustedHandle\('get-playback-relay-traffic'/);
-    assert.match(mainSource, /playbackRelays\.get\(request\.relayId\)/);
+    assert.match(mainSource, /const recordingInputUrl = relay \? relay\.url : request\.sourceUrl/);
     assert.match(mainSource, /registerTrustedHandle\('copy-statistics-card'/);
     assert.match(mainSource, /registerTrustedHandle\('save-statistics-card'/);
     assert.doesNotMatch(mainSource, /registerTrustedHandle\('begin-playback-recording'/);

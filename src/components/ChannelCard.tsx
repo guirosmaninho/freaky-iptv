@@ -549,11 +549,27 @@ export const ChannelCard = memo(ChannelCardComponent, (prevProps, nextProps) => 
     prevProps.activeChannelId === nextProps.activeChannelId &&
     Math.round(prevProps.currentProgress) === Math.round(nextProps.currentProgress) &&
     prevProps.currentProgram === nextProps.currentProgram &&
-    prevProps.channel.id === nextProps.channel.id &&
-    prevProps.channel.name === nextProps.channel.name &&
-    prevProps.channel.logoUrl === nextProps.channel.logoUrl &&
-    prevProps.channel.groupTitle === nextProps.channel.groupTitle &&
-    prevProps.channel.variants?.length === nextProps.channel.variants?.length &&
+    channelContentEqual(prevProps.channel, nextProps.channel) &&
     prevProps.qualityMappings === nextProps.qualityMappings
   );
 });
+
+function channelContentEqual(left: Channel, right: Channel): boolean {
+  if (left === right) return true;
+  if (left.contentRevision && right.contentRevision) return left.contentRevision === right.contentRevision;
+  if (left.id !== right.id || left.tvgId !== right.tvgId || left.name !== right.name ||
+    left.logoUrl !== right.logoUrl || left.groupTitle !== right.groupTitle || left.streamUrl !== right.streamUrl) {
+    return false;
+  }
+  const leftVariants = left.variants || [];
+  const rightVariants = right.variants || [];
+  if (leftVariants.length !== rightVariants.length) return false;
+  for (let index = 0; index < leftVariants.length; index += 1) {
+    const a = leftVariants[index];
+    const b = rightVariants[index];
+    if (a.id !== b.id || a.name !== b.name || a.streamUrl !== b.streamUrl || a.logoUrl !== b.logoUrl || a.tvgId !== b.tvgId) {
+      return false;
+    }
+  }
+  return true;
+}
