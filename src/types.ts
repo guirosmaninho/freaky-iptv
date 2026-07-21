@@ -392,6 +392,7 @@ declare global {
     getRecordingState: () => Promise<RecordingState>;
     listRecordings: () => Promise<RecordingEntry[]>;
     getRecordingPlaybackUrl: (id: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
+    getRecordingThumbnail: (id: string) => Promise<{ ok: boolean; dataUrl?: string; error?: string }>;
     startRecordingPlayback: (id: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
     renameRecording: (request: { id: string; name: string }) => Promise<{ ok: boolean; error?: string }>;
     deleteRecording: (id: string) => Promise<{ ok: boolean; error?: string }>;

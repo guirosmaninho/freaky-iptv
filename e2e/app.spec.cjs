@@ -239,10 +239,10 @@ test('renders the main screens at supported window sizes', async () => {
 test('checks for updates only after an explicit About action', async () => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('button', { name: 'About', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Atualizações' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Updates' })).toBeVisible();
   const versionRow = page.locator('.about-info-row').filter({ hasText: 'App Version' });
-  const updateButton = versionRow.getByRole('button', { name: 'Procurar atualizações', exact: true });
-  await expect(page.locator('.about-updates').getByRole('button', { name: 'Procurar atualizações', exact: true })).toHaveCount(0);
+  const updateButton = versionRow.getByRole('button', { name: 'Check for updates', exact: true });
+  await expect(page.locator('.about-updates').getByRole('button', { name: 'Check for updates', exact: true })).toHaveCount(0);
   const versionControlLayout = await versionRow.evaluate((row) => {
     const versionBadge = row.querySelector('.version-badge')?.getBoundingClientRect();
     const button = row.querySelector('button')?.getBoundingClientRect();
@@ -252,8 +252,8 @@ test('checks for updates only after an explicit About action', async () => {
   expect(versionControlLayout.buttonHeight).toBeLessThanOrEqual(28);
   await expect(updateButton).toBeEnabled();
   await updateButton.click();
-  await expect(page.getByRole('status')).toContainText('aplicacao empacotada');
-  await expect(updateButton).toHaveAccessibleName('Procurar atualizações');
+  await expect(page.getByRole('status')).toContainText('packaged application');
+  await expect(updateButton).toHaveAccessibleName('Check for updates');
 });
 test('zaps with arrow keys, wraps channels, and preserves full app mode', async () => {
   await page.setViewportSize({ width: 1920, height: 1080 });

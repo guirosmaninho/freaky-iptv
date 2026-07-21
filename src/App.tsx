@@ -274,7 +274,7 @@ export const App: React.FC = () => {
   const [discordRpcEnabled, setDiscordRpcEnabled] = useState(true);
   const [discordShowChannel, setDiscordShowChannel] = useState(true);
   const [discordShowProgram, setDiscordShowProgram] = useState(false);
-  const [discordShowArtwork, setDiscordShowArtwork] = useState(false);
+  const [discordShowArtwork, setDiscordShowArtwork] = useState(true);
   const [discordClientId, setDiscordClientId] = useState('1514411481259577364');
   
   // Channels and EPG guide data
@@ -522,7 +522,7 @@ export const App: React.FC = () => {
         setDiscordRpcEnabled(settings.discordRpcEnabled !== undefined ? settings.discordRpcEnabled : true);
         setDiscordShowChannel(settings.discordShowChannel !== undefined ? settings.discordShowChannel : true);
         setDiscordShowProgram(settings.discordShowProgram === true);
-        setDiscordShowArtwork(settings.discordShowArtwork === true);
+        setDiscordShowArtwork(settings.discordShowArtwork !== false);
         setDiscordClientId(settings.discordClientId || '1514411481259577364');
 
         // B. Load Cache

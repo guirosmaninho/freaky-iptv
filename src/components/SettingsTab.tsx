@@ -267,7 +267,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = (props) => {
         <div className="segmented-control appearance-segmented" role="radiogroup" aria-label="Application appearance">
           {(['system', 'light', 'dark'] as const).map(option => <button key={option} type="button" role="radio" aria-checked={appearance === option} className={appearance === option ? 'is-selected' : ''} onClick={() => change(setAppearance, option)} disabled={isBusy}>{option === 'system' ? 'Use system setting' : option === 'light' ? 'Light' : 'Dark'}</button>)}
         </div>
-        <label className="settings-field"><span>Language</span><select className="text-input" value={language} onChange={(event) => change(setLanguage, event.target.value as AppLanguage)} disabled={isBusy} aria-label="Application language"><option value="system">Use system language</option><option value="pt-PT">Português (Portugal)</option><option value="en">English</option></select></label>
+        <label className="settings-field"><span>Language</span><select className="text-input" value={language} onChange={(event) => change(setLanguage, event.target.value as AppLanguage)} disabled={isBusy} aria-label="Application language"><option value="system">Use system language</option><option value="pt-PT">Portuguese (Portugal)</option><option value="en">English</option></select></label>
       </SettingsSection>
 
       <SettingsSection id="integrations" title="Integrations" description="Control what Freaky IPTV shares with connected applications.">

@@ -38,7 +38,7 @@ export const AboutTab: React.FC = () => {
       setUpdate({
         ...INITIAL_UPDATE_STATE,
         status: 'error',
-        message: 'Não foi possível concluir a atualização. Tente novamente.'
+        message: 'Unable to complete the update. Try again.'
       });
     } finally {
       setIsUpdateBusy(false);
@@ -46,15 +46,15 @@ export const AboutTab: React.FC = () => {
   };
 
   const updateAction = update.status === 'available' && update.target === 'release-page'
-    ? { label: 'Abrir Releases no GitHub', action: () => runUpdateAction(async () => {
+    ? { label: 'Open GitHub Releases', action: () => runUpdateAction(async () => {
       await window.electron.openReleasePage();
-      return { ...update, message: 'As Releases do GitHub foram abertas no navegador.' };
+      return { ...update, message: 'GitHub Releases opened in your browser.' };
     }) }
     : update.status === 'available'
-      ? { label: `Descarregar atualização ${update.version}`, action: () => runUpdateAction(window.electron.downloadUpdate) }
-    : update.status === 'downloaded'
-      ? { label: 'Reiniciar e instalar', action: () => runUpdateAction(window.electron.installUpdate) }
-      : { label: isUpdateBusy ? 'A procurar atualizações…' : 'Procurar atualizações', action: () => runUpdateAction(window.electron.checkForUpdates) };
+      ? { label: `Download update ${update.version}`, action: () => runUpdateAction(window.electron.downloadUpdate) }
+      : update.status === 'downloaded'
+      ? { label: 'Restart and install', action: () => runUpdateAction(window.electron.installUpdate) }
+      : { label: isUpdateBusy ? 'Checking for updates…' : 'Check for updates', action: () => runUpdateAction(window.electron.checkForUpdates) };
 
   return (
     <div className="about-page animate-fade">
@@ -88,7 +88,7 @@ export const AboutTab: React.FC = () => {
                   onClick={updateAction.action}
                   disabled={isUpdateBusy || update.status === 'checking' || update.status === 'downloading' || update.status === 'installing'}
                 >
-                  {update.status === 'downloading' ? `A transferir ${update.progress}%` : update.status === 'installing' ? 'A instalar…' : updateAction.label}
+                  {update.status === 'downloading' ? `Downloading ${update.progress}%` : update.status === 'installing' ? 'Installing…' : updateAction.label}
                 </button>
               </div>
             </div>
@@ -124,30 +124,30 @@ export const AboutTab: React.FC = () => {
 
       <section className="about-card about-updates" aria-labelledby="about-updates-title">
         <div>
-          <h2 id="about-updates-title" className="about-card-title">Atualizações</h2>
+          <h2 id="about-updates-title" className="about-card-title">Updates</h2>
           <p className="about-card-text">
-            Procure novas versões publicadas no GitHub. No macOS, uma nova versão abre as Releases no navegador; no Windows, a transferência e instalação só começam após a sua confirmação.
+            Check for new versions published on GitHub. On macOS, a new version opens GitHub Releases in your browser; on Windows, download and installation begin only after you confirm.
           </p>
         </div>
         <div className="about-update-status" role="status" aria-live="polite">
-          {update.status === 'idle' && 'Ainda não procurou atualizações nesta sessão.'}
+          {update.status === 'idle' && 'No update check has been run in this session.'}
           {update.message && update.message}
           {update.status === 'downloading' && <progress value={update.progress} max="100">{update.progress}%</progress>}
-          {update.status === 'available' && <strong>Atualização disponível: {update.version}</strong>}
-          {update.status === 'downloaded' && <strong>Atualização pronta para instalar.</strong>}
+          {update.status === 'available' && <strong>Update available: {update.version}</strong>}
+          {update.status === 'downloaded' && <strong>Update ready to install.</strong>}
         </div>
         {update.notes && (
           <details className="about-update-notes">
-            <summary>Notas da versão {update.version}</summary>
+            <summary>Release notes for {update.version}</summary>
             <pre>{update.notes}</pre>
           </details>
         )}
         <div className="about-update-actions">
           {update.target === 'portable' && update.status === 'downloaded' && (
-            <span className="about-update-note">A app será encerrada e o executável portátil será substituído no mesmo directório.</span>
+            <span className="about-update-note">The app will close and the portable executable will be replaced in the same directory.</span>
           )}
           {update.target === 'release-page' && update.status === 'available' && (
-            <span className="about-update-note">Descarregue o DMG adequado ao processador do seu Mac nas Releases do GitHub.</span>
+            <span className="about-update-note">Download the DMG for your Mac's processor from GitHub Releases.</span>
           )}
         </div>
       </section>

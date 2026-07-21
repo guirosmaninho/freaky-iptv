@@ -19,7 +19,7 @@
   <path d="M0 330 C100 290 150 350 250 325 S420 280 540 325 V380 H0Z" fill="#c6d6e7" opacity="0.24"/>
 
   <text x="270" y="65" text-anchor="middle" fill="#182536" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="25" font-weight="700" letter-spacing="0.3">FreakyIPTV</text>
-  <text x="270" y="87" text-anchor="middle" fill="#60748b" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="500">Arraste para instalar no seu Mac</text>
+  <text x="270" y="87" text-anchor="middle" fill="#60748b" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="500">Drag to install on your Mac</text>
   <rect x="232" y="99" width="76" height="2" rx="1" fill="#4b9bd8" opacity="0.78"/>
 
   <ellipse cx="270" cy="220" rx="121" ry="103" fill="#91bce0" opacity="0.18" filter="url(#soft-shadow)"/>

@@ -30,11 +30,14 @@ it('keeps application updates manual and confines downloads to trusted GitHub re
   assert.match(preloadSource, /installUpdate/);
   assert.match(preloadSource, /openReleasePage/);
   assert.match(typeSource, /UpdateCheckResult/);
-  assert.match(aboutSource, /Procurar atualizações/);
+  assert.match(aboutSource, /Check for updates/);
   assert.match(mainSource, /process\.platform === 'darwin'/);
   assert.match(mainSource, /target === 'release-page'/);
   assert.match(mainSource, /openReleasePage\(\)/);
-  assert.match(aboutSource, /Abrir Releases no GitHub/);
+  assert.match(aboutSource, /Open GitHub Releases/);
+  assert.match(mainSource, /Updates are only available in a packaged application\./);
+  assert.doesNotMatch(mainSource, /As atualizacoes estao disponiveis apenas numa aplicacao empacotada\./);
+  assert.doesNotMatch(mainSource, /Nao foi possivel procurar ou transferir a atualizacao/);
 });
 
 it('requires updater metadata in Windows release verification', () => {

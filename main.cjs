@@ -45,6 +45,7 @@ const PLATFORM_DIRECTORIES = resolvePlatformDirectories({
 const LEGACY_DATA_DIR = PLATFORM_DIRECTORIES.legacyDir;
 const DATA_DIR = PLATFORM_DIRECTORIES.dataDir;
 const CACHE_DIR = path.join(DATA_DIR, 'cache');
+const RECORDING_THUMBNAIL_DIR = path.join(CACHE_DIR, 'recording-thumbnails');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const CACHE_FILE = path.join(CACHE_DIR, 'snapshot.json');
@@ -63,6 +64,7 @@ const DNS_CACHE_FAILURE_TTL_MS = 5 * 1000;
 const MAX_DISCORD_PACKET_BYTES = 1024 * 1024;
 const MAX_DISCORD_ASSET_LENGTH = 256;
 const MAX_PNG_BYTES = 16 * 1024 * 1024;
+const MAX_RECORDING_THUMBNAIL_BYTES = 4 * 1024 * 1024;
 const MAX_UPDATE_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const PROJECT_URL = 'https://github.com/guirosmaninho/freaky-iptv';
 const NEW_ISSUE_URL = 'https://github.com/guirosmaninho/freaky-iptv/issues/new';
@@ -76,6 +78,7 @@ const migrationStatus = process.env.FREAKYIPTV_E2E === '1'
   ? { migrated: false, status: 'test-isolated', copied: [] }
   : LEGACY_DATA_DIR ? migrateLegacyData({ legacyDir: LEGACY_DATA_DIR, dataDir: DATA_DIR }) : { migrated: false, status: 'not-applicable', copied: [] };
 fs.mkdirSync(CACHE_DIR, { recursive: true });
+fs.mkdirSync(RECORDING_THUMBNAIL_DIR, { recursive: true });
 fs.mkdirSync(BACKUP_DIR, { recursive: true });
 app.setPath('userData', path.join(DATA_DIR, 'electron'));
 const dataStore = createDataStore({
@@ -96,7 +99,7 @@ let currentDiscordSettings = {
   enabled: false,
   showChannel: true,
   showProgram: false,
-  showArtwork: false,
+  showArtwork: true,
   clientId: '1514411481259577364'
 };
 let lastActiveChannelName = null;
@@ -234,7 +237,8 @@ function serializeSettingsForDisk(settings) {
     DiscordRpcEnabled: settings.discordRpcEnabled !== undefined ? settings.discordRpcEnabled : false,
     DiscordShowChannel: settings.discordShowChannel !== undefined ? settings.discordShowChannel : true,
     DiscordShowProgram: settings.discordShowProgram !== undefined ? settings.discordShowProgram : false,
-    DiscordShowArtwork: settings.discordShowArtwork !== undefined ? settings.discordShowArtwork : false,
+    DiscordShowArtwork: settings.discordShowArtwork !== undefined ? settings.discordShowArtwork : true,
+    DiscordArtworkPreferenceVersion: 1,
     DiscordClientId: settings.discordClientId || '1514411481259577364',
     Appearance: settings.appearance || 'system',
     Language: ['system', 'pt-PT', 'en'].includes(settings.language) ? settings.language : 'system',
@@ -266,7 +270,7 @@ function loadSettingsFromFile() {
       discordRpcEnabled: false,
       discordShowChannel: true,
       discordShowProgram: false,
-      discordShowArtwork: false,
+      discordShowArtwork: true,
       discordClientId: '1514411481259577364',
       appearance: 'system',
       language: 'system',
@@ -280,6 +284,9 @@ function loadSettingsFromFile() {
     const raw = fs.readFileSync(SETTINGS_FILE, 'utf8');
     const data = JSON.parse(raw);
     
+    const hasDiscordArtworkPreference = data.DiscordArtworkPreferenceVersion === 1;
+    const storedDiscordShowArtwork = data.DiscordShowArtwork;
+
     return {
       settingsRevision: Number.isSafeInteger(data.SettingsRevision) ? data.SettingsRevision : 0,
       playlistUrl: decrypt(data.PlaylistUrl || data.playlistUrl),
@@ -294,10 +301,13 @@ function loadSettingsFromFile() {
       historyRetentionDays: data.HistoryRetentionDays !== undefined ? data.HistoryRetentionDays : 365,
       discordRpcEnabled: data.DiscordRpcEnabled !== undefined ? data.DiscordRpcEnabled : false,
       discordShowChannel: data.DiscordShowChannel !== undefined ? data.DiscordShowChannel : true,
-      // Legacy builds only exposed the channel toggle. Programme and artwork
-      // must remain opt-in when those settings are introduced.
+      // Legacy builds did not expose the artwork switch. Restore the previous
+      // behaviour for those settings, while preserving an explicit choice
+      // after the preference version has been written.
       discordShowProgram: data.DiscordShowProgram !== undefined ? data.DiscordShowProgram : false,
-      discordShowArtwork: data.DiscordShowArtwork !== undefined ? data.DiscordShowArtwork : false,
+      discordShowArtwork: hasDiscordArtworkPreference
+        ? storedDiscordShowArtwork === true
+        : storedDiscordShowArtwork !== false,
       discordClientId: data.DiscordClientId || '1514411481259577364',
       appearance: ['system', 'light', 'dark'].includes(data.Appearance) ? data.Appearance : 'system',
       language: ['system', 'pt-PT', 'en'].includes(data.Language) ? data.Language : 'system',
@@ -321,7 +331,7 @@ function loadSettingsFromFile() {
       discordRpcEnabled: false,
       discordShowChannel: true,
       discordShowProgram: false,
-      discordShowArtwork: false,
+      discordShowArtwork: true,
       discordClientId: '1514411481259577364',
       appearance: 'system',
       language: 'system',
@@ -740,7 +750,7 @@ function updateFailure(error) {
   return publishUpdateState({
     status: 'error',
     progress: 0,
-    message: 'Nao foi possivel procurar ou transferir a atualizacao. Tente novamente.'
+    message: 'Unable to check for or download the update. Try again.'
   });
 }
 
@@ -902,7 +912,7 @@ async function checkForManualUpdate() {
       status: 'unsupported',
       target: '',
       progress: 0,
-      message: 'As atualizacoes estao disponiveis apenas numa aplicacao empacotada.'
+      message: 'Updates are only available in a packaged application.'
     });
   }
 
@@ -911,7 +921,7 @@ async function checkForManualUpdate() {
     if (target === 'release-page') {
       const release = await getGithubJson(GITHUB_LATEST_RELEASE_URL);
       if (!release || release.draft || release.prerelease || compareVersions(release.tag_name, app.getVersion()) <= 0) {
-        return publishUpdateState({ status: 'up-to-date', message: 'Ja tem a versao mais recente.' });
+        return publishUpdateState({ status: 'up-to-date', message: 'You already have the latest version.' });
       }
       const version = release.tag_name.replace(/^v/i, '');
       await openReleasePage();
@@ -919,7 +929,7 @@ async function checkForManualUpdate() {
         status: 'available',
         version,
         notes: typeof release.body === 'string' ? release.body.slice(0, 16 * 1024) : '',
-        message: 'Nova versao encontrada. As Releases do GitHub foram abertas no navegador.'
+        message: 'New version found. GitHub Releases were opened in your browser.'
       });
     }
 
@@ -927,27 +937,27 @@ async function checkForManualUpdate() {
       const release = await getGithubJson(GITHUB_LATEST_RELEASE_URL);
       const candidate = selectReleaseCandidate(release, app.getVersion(), 'portable');
       if (!candidate) {
-        return publishUpdateState({ status: 'up-to-date', message: 'Ja tem a versao mais recente.' });
+        return publishUpdateState({ status: 'up-to-date', message: 'You already have the latest version.' });
       }
       return publishUpdateState({
         status: 'available',
         version: candidate.version,
         notes: candidate.notes,
         asset: candidate.asset,
-        message: 'Atualizacao disponivel.'
+        message: 'Update available.'
       });
     }
 
     const result = await autoUpdater.checkForUpdates();
     const version = result?.updateInfo?.version;
     if (!version || compareVersions(version, app.getVersion()) <= 0) {
-      return publishUpdateState({ status: 'up-to-date', message: 'Ja tem a versao mais recente.' });
+      return publishUpdateState({ status: 'up-to-date', message: 'You already have the latest version.' });
     }
     return publishUpdateState({
       status: 'available',
       version,
       notes: typeof result.updateInfo.releaseNotes === 'string' ? result.updateInfo.releaseNotes.slice(0, 16 * 1024) : '',
-      message: 'Atualizacao disponivel.'
+      message: 'Update available.'
     });
   } catch (error) {
     return updateFailure(error);
@@ -957,14 +967,14 @@ async function checkForManualUpdate() {
 async function downloadManualUpdate() {
   if (updateState.target === 'release-page') {
     await openReleasePage();
-    return publishUpdateState({ status: 'available', message: 'As Releases do GitHub foram abertas no navegador.' });
+    return publishUpdateState({ status: 'available', message: 'GitHub Releases were opened in your browser.' });
   }
 
   if (updateState.status !== 'available' || !updateState.target) {
-    return publishUpdateState({ status: 'error', message: 'Procure uma atualizacao antes de iniciar a transferencia.' });
+    return publishUpdateState({ status: 'error', message: 'Check for an update before starting the download.' });
   }
 
-  publishUpdateState({ status: 'downloading', progress: 0, message: 'A transferir a atualizacao...' });
+  publishUpdateState({ status: 'downloading', progress: 0, message: 'Downloading the update...' });
   try {
     if (updateState.target === 'portable') {
       const executablePath = process.env.PORTABLE_EXECUTABLE_FILE || '';
@@ -978,12 +988,12 @@ async function downloadManualUpdate() {
         status: 'downloaded',
         downloadedPath,
         progress: 100,
-        message: 'Atualizacao pronta para instalar.'
+        message: 'Update ready to install.'
       });
     }
 
     await autoUpdater.downloadUpdate();
-    return publishUpdateState({ status: 'downloaded', progress: 100, message: 'Atualizacao pronta para instalar.' });
+    return publishUpdateState({ status: 'downloaded', progress: 100, message: 'Update ready to install.' });
   } catch (error) {
     return updateFailure(error);
   }
@@ -991,14 +1001,14 @@ async function downloadManualUpdate() {
 
 function installManualUpdate() {
   if (updateState.target === 'release-page') {
-    return publishUpdateState({ status: 'unsupported', message: 'No macOS, descarregue a nova versao nas Releases do GitHub.' });
+    return publishUpdateState({ status: 'unsupported', message: 'On macOS, download the new version from GitHub Releases.' });
   }
   if (updateState.status !== 'downloaded' || !updateState.target) {
-    return publishUpdateState({ status: 'error', message: 'A atualizacao ainda nao esta pronta para instalar.' });
+    return publishUpdateState({ status: 'error', message: 'The update is not ready to install yet.' });
   }
 
   if (updateState.target === 'nsis') {
-    publishUpdateState({ status: 'installing', message: 'A reiniciar para instalar a atualizacao...' });
+    publishUpdateState({ status: 'installing', message: 'Restarting to install the update...' });
     autoUpdater.quitAndInstall(false, true);
     return getPublicUpdateState();
   }
@@ -1020,7 +1030,7 @@ function installManualUpdate() {
       windowsHide: true
     });
     helper.unref();
-    publishUpdateState({ status: 'installing', message: 'A reiniciar para instalar a atualizacao...' });
+    publishUpdateState({ status: 'installing', message: 'Restarting to install the update...' });
     app.quit();
     return getPublicUpdateState();
   } catch (error) {
@@ -1113,7 +1123,10 @@ function validateReminder(reminder) {
 function dispatchReminder(reminder) {
   const title = 'Freaky IPTV reminder';
   const body = reminder.programmeTitle || 'A scheduled programme is about to start.';
+  let fallbackShown = false;
   const showFallback = () => {
+    if (fallbackShown) return;
+    fallbackShown = true;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('reminder-notification', { ...reminder, title, body });
       if (process.platform === 'darwin') app.dock?.bounce('informational');
@@ -1123,6 +1136,7 @@ function dispatchReminder(reminder) {
   try {
     if (Notification.isSupported()) {
       const notification = new Notification({ title, body });
+      notification.once('failed', showFallback);
       notification.on('click', () => {
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.show();
@@ -1377,6 +1391,7 @@ let recordingStopPromise = null;
 let recordingRelayId = null;
 let recordingState = { status: 'idle', mode: null, path: null, startedAtUtc: null, bytes: 0, error: null };
 const recordingIndex = new Map();
+const recordingThumbnailTasks = new Map();
 let recordingPlaybackServer = null;
 
 function publicRecordingState() {
@@ -1399,6 +1414,7 @@ function resolveFfmpegPath() {
     const bundled = require('ffmpeg-static');
     const unpacked = bundled.replace('app.asar', 'app.asar.unpacked');
     if (fs.existsSync(unpacked)) return unpacked;
+    if (fs.existsSync(bundled)) return bundled;
   } catch {}
   return 'ffmpeg';
 }
@@ -1453,7 +1469,7 @@ registerTrustedHandle('start-source-recording', async (event, request) => {
   // account. The relay remains alive after recording finalisation, so the
   // player never receives a spurious ended event.
   const relay = request.relayId ? playbackRelays.get(request.relayId) : null;
-  const recordingInputUrl = relay ? relay.url : request.sourceUrl;
+  const recordingInputUrl = relay ? `${relay.url}?consumer=recording` : request.sourceUrl;
   const args = [
     '-hide_banner', '-loglevel', 'warning', '-user_agent', 'VLC/3.0.18 LibVLC/3.0.18',
     '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '4',
@@ -1501,7 +1517,14 @@ async function scanRecordings() {
         const stats = await fs.promises.stat(absolutePath);
         const relativePath = path.relative(root, absolutePath);
         const id = crypto.createHash('sha256').update(relativePath).digest('hex').slice(0, 32);
-        recordingIndex.set(id, { root, absolutePath, relativePath });
+        recordingIndex.set(id, {
+          id,
+          root,
+          absolutePath,
+          relativePath,
+          bytes: stats.size,
+          modifiedAtUtc: stats.mtime.toISOString()
+        });
         results.push({ id, name: entry.name, bytes: stats.size, modifiedAtUtc: stats.mtime.toISOString(), status: 'ready' });
       }
     }
@@ -1520,12 +1543,106 @@ function resolveRecordingId(id) {
   return entry;
 }
 
+function recordingThumbnailCachePath(entry) {
+  const cacheKey = crypto.createHash('sha256')
+    .update(`${entry.id}:${entry.bytes}:${entry.modifiedAtUtc}`)
+    .digest('hex');
+  return path.join(RECORDING_THUMBNAIL_DIR, `${cacheKey}.jpg`);
+}
+
+function extractRecordingThumbnail(entry) {
+  const run = (seekSeconds) => new Promise((resolve, reject) => {
+    const process = spawn(resolveFfmpegPath(), [
+      '-hide_banner', '-loglevel', 'error', '-ss', seekSeconds, '-i', entry.absolutePath,
+      '-map', '0:v:0?', '-frames:v', '1', '-vf', 'scale=320:-2', '-q:v', '5',
+      '-an', '-sn', '-dn', '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1'
+    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    const chunks = [];
+    let totalBytes = 0;
+    let settled = false;
+    const fail = error => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
+    process.stdout.on('data', chunk => {
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_RECORDING_THUMBNAIL_BYTES) {
+        try { process.kill(); } catch {}
+        fail(new Error('Recording thumbnail exceeded its size limit.'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    process.once('error', fail);
+    process.once('exit', code => {
+      if (settled) return;
+      if (code !== 0) {
+        fail(new Error('FFmpeg could not extract a recording thumbnail.'));
+        return;
+      }
+      const image = Buffer.concat(chunks);
+      if (image.length === 0) {
+        fail(new Error('Recording does not contain a decodable video frame.'));
+        return;
+      }
+      settled = true;
+      resolve(image);
+    });
+  });
+
+  return (async () => {
+    let lastError = null;
+    for (const seekSeconds of ['2', '0']) {
+      try {
+        return await run(seekSeconds);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error('FFmpeg could not extract a recording thumbnail.');
+  })();
+}
+
+async function loadRecordingThumbnail(entry) {
+  const cachePath = recordingThumbnailCachePath(entry);
+  try {
+    const cached = await fs.promises.readFile(cachePath);
+    if (cached.length > 0 && cached.length <= MAX_RECORDING_THUMBNAIL_BYTES) return cached;
+  } catch {}
+
+  let task = recordingThumbnailTasks.get(cachePath);
+  if (!task) {
+    task = extractRecordingThumbnail(entry);
+    recordingThumbnailTasks.set(cachePath, task);
+    const clearTask = () => {
+      if (recordingThumbnailTasks.get(cachePath) === task) recordingThumbnailTasks.delete(cachePath);
+    };
+    task.then(clearTask, clearTask);
+  }
+  const image = await task;
+  await fs.promises.writeFile(cachePath, image, { flag: 'w' });
+  return image;
+}
+
 registerTrustedHandle('list-recordings', () => scanRecordings());
 registerTrustedHandle('get-recording-playback-url', async (event, id) => {
   // Refresh the index if the library page has not scanned during this process.
   if (!recordingIndex.has(id)) await scanRecordings();
   resolveRecordingId(id);
   return { ok: true, url: `freaky-recording://${encodeURIComponent(id)}` };
+});
+registerTrustedHandle('get-recording-thumbnail', async (event, id) => {
+  try {
+    if (!recordingIndex.has(id)) await scanRecordings();
+    const entry = resolveRecordingId(id);
+    const image = await loadRecordingThumbnail(entry);
+    return { ok: true, dataUrl: `data:image/jpeg;base64,${image.toString('base64')}` };
+  } catch (error) {
+    console.warn('Failed to generate recording thumbnail:', error?.message || error);
+    return { ok: false, error: 'Unable to generate a preview for this recording.' };
+  }
 });
 
 function stopRecordingPlaybackProxy() {
@@ -2170,6 +2287,7 @@ function broadcastPlaybackRelayChunk(relay, chunk) {
     sendPlaybackRelayHeaders(relay, client);
     if (!client.headersSent || client.response.writableEnded) continue;
     if (!client.response.write(chunk)) {
+      if (client.ignoreBackpressure) continue;
       pendingDrains += 1;
       client.response.once('drain', resumeIfReady);
     }
@@ -2304,7 +2422,11 @@ function startPlaybackRelayServer(sourceUrl) {
         relay.idleTimer = null;
       }
 
-      const client = { response: clientRes, headersSent: false, closed: false, needsReplay: relay.headersReady };
+      let isRecordingClient = false;
+      try {
+        isRecordingClient = new URL(clientReq.url || '/', relay.url || 'http://127.0.0.1/').searchParams.get('consumer') === 'recording';
+      } catch {}
+      const client = { response: clientRes, headersSent: false, closed: false, needsReplay: relay.headersReady, ignoreBackpressure: isRecordingClient };
       relay.clients.add(client);
       sendPlaybackRelayHeaders(relay, client);
       startPlaybackRelayUpstream(relay);
@@ -3395,7 +3517,7 @@ async function applyDiscordSettings(enabled, showChannel, showProgram, showArtwo
   currentDiscordSettings.enabled = enabled !== undefined ? enabled : false;
   currentDiscordSettings.showChannel = showChannel !== undefined ? showChannel : true;
   currentDiscordSettings.showProgram = showProgram !== undefined ? showProgram : false;
-  currentDiscordSettings.showArtwork = showArtwork !== undefined ? showArtwork : false;
+  currentDiscordSettings.showArtwork = showArtwork !== undefined ? showArtwork : true;
   currentDiscordSettings.clientId = clientId || '1514411481259577364';
 
   if (!currentDiscordSettings.enabled) {

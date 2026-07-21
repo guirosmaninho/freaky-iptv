@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('electron', {
   getRecordingState: () => ipcRenderer.invoke('get-recording-state'),
   listRecordings: () => ipcRenderer.invoke('list-recordings'),
   getRecordingPlaybackUrl: (id) => ipcRenderer.invoke('get-recording-playback-url', id),
+  getRecordingThumbnail: (id) => ipcRenderer.invoke('get-recording-thumbnail', id),
   startRecordingPlayback: (id) => ipcRenderer.invoke('start-recording-playback', id),
   renameRecording: (request) => ipcRenderer.invoke('rename-recording', request),
   deleteRecording: (id) => ipcRenderer.invoke('delete-recording', id),
