@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import type { Channel, EPGProgram } from '../types';
+import type { Channel, EPGProgram, Reminder } from '../types';
 
 const INITIAL_VISIBLE_GUIDE_COUNT = 80;
 const GUIDE_LOAD_MORE_COUNT = 60;
@@ -8,6 +8,8 @@ interface TvGuideTabProps {
   channels: Channel[];
   onPlayChannel: (channel: Channel) => void;
   getChannelEpgInfo: (channel: Channel) => { program: EPGProgram | null; progress: number; upcoming: EPGProgram[] };
+  reminders: Reminder[];
+  onToggleReminder: (channel: Channel, programme: EPGProgram, leadMinutes: Reminder['leadMinutes']) => void;
 }
 
 const getInitials = (name: string) => {
@@ -40,6 +42,8 @@ interface TvGuideRowProps {
   program: EPGProgram | null;
   progress: number;
   upcoming: EPGProgram[];
+  reminders: Reminder[];
+  onToggleReminder: (channel: Channel, programme: EPGProgram) => void;
 }
 
 const TvGuideRowComponent: React.FC<TvGuideRowProps> = ({
@@ -49,8 +53,26 @@ const TvGuideRowComponent: React.FC<TvGuideRowProps> = ({
   onLogoError,
   program,
   progress,
-  upcoming
+  upcoming,
+  reminders,
+  onToggleReminder
 }) => {
+  const reminderId = (programme: EPGProgram) => `${channel.id}\u0000${programme.startUtc}`;
+  const reminderButton = (programme: EPGProgram) => {
+    const isReminderSet = reminders.some(reminder => reminder.id === reminderId(programme));
+
+    return (
+      <button
+        type="button"
+        className={`player-ghost-button tv-guide-reminder-button${isReminderSet ? ' is-active' : ''}`}
+        onClick={(event) => { event.stopPropagation(); onToggleReminder(channel, programme); }}
+        aria-pressed={isReminderSet}
+        aria-label={`${isReminderSet ? 'Remove' : 'Set'} reminder for ${programme.title}`}
+      >
+        {isReminderSet ? 'Reminder set' : 'Remind me'}
+      </button>
+    );
+  };
   const renderUpcomingCell = (upcomingProgram: EPGProgram | undefined, label: string, className = '') => (
     <div className={`tv-guide-cell tv-guide-upcoming ${className}`}>
       {upcomingProgram ? (
@@ -62,6 +84,7 @@ const TvGuideRowComponent: React.FC<TvGuideRowProps> = ({
           <span className="tv-guide-program-time">
             {formatTime(upcomingProgram.startUtc)} - {formatTime(upcomingProgram.stopUtc)}
           </span>
+          {reminderButton(upcomingProgram)}
         </>
       ) : (
         <span className="tv-guide-empty">No upcoming programme</span>
@@ -70,10 +93,17 @@ const TvGuideRowComponent: React.FC<TvGuideRowProps> = ({
   );
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       className="tv-guide-grid tv-guide-row glass-card"
       onClick={() => onPlayChannel(channel)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onPlayChannel(channel);
+        }
+      }}
       title={`Play ${channel.name}`}
     >
       <div className="tv-guide-channel">
@@ -117,6 +147,7 @@ const TvGuideRowComponent: React.FC<TvGuideRowProps> = ({
             <span className="tv-guide-program-time">
               {formatTime(program.startUtc)} - {formatTime(program.stopUtc)}
             </span>
+            {reminderButton(program)}
           </>
         ) : (
           <span className="tv-guide-empty">No schedule available</span>
@@ -126,7 +157,7 @@ const TvGuideRowComponent: React.FC<TvGuideRowProps> = ({
       {renderUpcomingCell(upcoming[0], 'Next')}
       {renderUpcomingCell(upcoming[1], 'Later', 'tv-guide-later-2')}
       {renderUpcomingCell(upcoming[2], 'Later', 'tv-guide-later-3')}
-    </button>
+    </div>
   );
 };
 
@@ -147,6 +178,8 @@ const TvGuideRow = memo(TvGuideRowComponent, (prevProps, nextProps) => {
     prevProps.channel.name === nextProps.channel.name &&
     prevProps.channel.logoUrl === nextProps.channel.logoUrl &&
     prevProps.channel.groupTitle === nextProps.channel.groupTitle &&
+    prevProps.reminders === nextProps.reminders &&
+    prevProps.onToggleReminder === nextProps.onToggleReminder &&
     areUpcomingEqual(prevProps.upcoming, nextProps.upcoming)
   );
 });
@@ -154,9 +187,12 @@ const TvGuideRow = memo(TvGuideRowComponent, (prevProps, nextProps) => {
 const TvGuideTabComponent: React.FC<TvGuideTabProps> = ({
   channels,
   onPlayChannel,
-  getChannelEpgInfo
+  getChannelEpgInfo,
+  reminders,
+  onToggleReminder
 }) => {
   const [searchText, setSearchText] = useState('');
+  const [reminderLeadMinutes, setReminderLeadMinutes] = useState<Reminder['leadMinutes']>(10);
   const [logoFailedMap, setLogoFailedMap] = useState<Record<string, boolean>>({});
   const deferredSearchText = useDeferredValue(searchText);
   const normalizedSearchText = useMemo(
@@ -176,6 +212,11 @@ const TvGuideTabComponent: React.FC<TvGuideTabProps> = ({
   const handleLogoError = useCallback((channelId: string) => {
     setLogoFailedMap(prev => ({ ...prev, [channelId]: true }));
   }, []);
+
+  const handleRowToggleReminder = useCallback(
+    (channel: Channel, programme: EPGProgram) => onToggleReminder(channel, programme, reminderLeadMinutes),
+    [onToggleReminder, reminderLeadMinutes]
+  );
 
   useEffect(() => {
     if (scrollContainerRef.current) {
@@ -250,6 +291,12 @@ const TvGuideTabComponent: React.FC<TvGuideTabProps> = ({
             </svg>
           </div>
         </div>
+        <label className="field-label">
+          Reminder
+          <select value={reminderLeadMinutes} onChange={(event) => setReminderLeadMinutes(Number(event.target.value) as Reminder['leadMinutes'])} className="text-input">
+            {[0, 5, 10, 15, 30].map(minutes => <option key={minutes} value={minutes}>{minutes === 0 ? 'At start' : `${minutes} min before`}</option>)}
+          </select>
+        </label>
       </div>
 
       <div className="tv-guide-scroll" onScroll={handleScroll} ref={scrollContainerRef}>
@@ -277,6 +324,8 @@ const TvGuideTabComponent: React.FC<TvGuideTabProps> = ({
                     program={program}
                     progress={progress}
                     upcoming={upcoming}
+                    reminders={reminders}
+                    onToggleReminder={handleRowToggleReminder}
                   />
                 );
               })}

@@ -132,6 +132,86 @@ const MODIFIER_CHARACTER_MAP: Record<string, string> = {
   'ᴿ': 'r', 'ᵀ': 't', 'ᵁ': 'u', 'ⱽ': 'v', 'ᵂ': 'w'
 };
 
+const DEFAULT_QUALITY_MAPPINGS: Record<string, string> = {
+  '4K': '4k, 2160p, uhd',
+  'FHD': 'fhd, 1080p, 1080',
+  'HEVC': 'hevc, h265, h.265',
+  'HD': 'hd, 720p, 720',
+  'SD': 'sd, 576p, 480p, 576, 480',
+  'Low': 'low, mobile',
+  'Backup': 'backup'
+};
+const QUALITY_ORDER = ['4K', 'FHD', 'HEVC', 'HD', 'SD', 'Low', 'Backup'];
+const DEFAULT_BASE_KEYWORDS = [
+  'fhd', 'hd', 'sd', '4k', 'uhd', 'raw', 'hevc', 'h265', 'h264', 'h.264', 'h.265',
+  '1080p', '720p', '480p', '576p', '2160p', '360p',
+  '1080', '720', '576', '480', '360', '2160',
+  'backup', 'temp', 'test', 'mobile', 'high', 'low', 'full', 'fullhd', 'compat'
+];
+const CODEC_KEYWORDS = ['hevc', 'h265', 'h264', 'h.264', 'h.265', 'raw'];
+const COMPILED_MATCHER_CACHE_LIMIT = 32;
+
+type CompiledQualityMatchers = {
+  stripMatchers: RegExp[];
+  labelMatchers: Array<{ label: string; matchers: RegExp[] }>;
+};
+
+const compiledMatcherCache = new Map<string, CompiledQualityMatchers>();
+
+const escapeRegExp = (value: string) => value.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+const matcherCacheKey = (mappings?: Record<string, string>) => {
+  if (!mappings) return '\u0000defaults';
+  return Object.keys(mappings)
+    .sort()
+    .map(key => `${key}\u0000${mappings[key]}`)
+    .join('\u0001');
+};
+
+const compileBoundaryMatcher = (keyword: string, flags = '') =>
+  new RegExp(`(?:^|[^a-zA-Z0-9])${escapeRegExp(keyword)}(?=$|[^a-zA-Z0-9])`, flags);
+
+const getCompiledQualityMatchers = (mappings?: Record<string, string>): CompiledQualityMatchers => {
+  const cacheKey = matcherCacheKey(mappings);
+  const cached = compiledMatcherCache.get(cacheKey);
+  if (cached) return cached;
+
+  const stripKeywords = new Set<string>();
+  if (mappings) {
+    for (const value of Object.values(mappings)) {
+      for (const keyword of value.split(',').map(part => part.trim().toLowerCase()).filter(Boolean)) {
+        stripKeywords.add(keyword);
+      }
+    }
+  } else {
+    for (const keyword of DEFAULT_BASE_KEYWORDS) stripKeywords.add(keyword);
+  }
+  for (const keyword of CODEC_KEYWORDS) stripKeywords.add(keyword);
+
+  const activeMappings = { ...DEFAULT_QUALITY_MAPPINGS, ...(mappings || {}) };
+  const compiled = {
+    stripMatchers: [
+      /\[|\]|\(|\)|-|\+|\|/g,
+      ...Array.from(stripKeywords, keyword => compileBoundaryMatcher(keyword, 'gi'))
+    ],
+    labelMatchers: QUALITY_ORDER.map(label => ({
+      label,
+      matchers: (activeMappings[label] || '')
+        .split(',')
+        .map(part => part.trim().toLowerCase())
+        .filter(Boolean)
+        .map(keyword => compileBoundaryMatcher(keyword))
+    }))
+  };
+
+  if (compiledMatcherCache.size >= COMPILED_MATCHER_CACHE_LIMIT) {
+    const oldestKey = compiledMatcherCache.keys().next().value;
+    if (oldestKey !== undefined) compiledMatcherCache.delete(oldestKey);
+  }
+  compiledMatcherCache.set(cacheKey, compiled);
+  return compiled;
+};
+
 function normalizeChannelQualityText(name: string): string {
   const clean = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   let mapped = '';
@@ -147,47 +227,9 @@ function normalizeChannelQualityText(name: string): string {
 export function getChannelBaseName(name: string, mappings?: Record<string, string>): string {
   if (!name) return '';
   let clean = normalizeChannelQualityText(name);
-  
-  // Assemble keywords to strip
-  const keywordsToStrip: RegExp[] = [
-    /\[|\]|\(|\)|-|\+|\|/g // remove bracket delimiters
-  ];
 
-  const allKeywords = new Set<string>();
-  if (mappings) {
-    for (const key in mappings) {
-      const labels = mappings[key].split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-      for (const kw of labels) {
-        allKeywords.add(kw);
-      }
-    }
-  } else {
-    // Default fallback list of keywords if no custom mappings
-    const defaults = [
-      'fhd', 'hd', 'sd', '4k', 'uhd', 'raw', 'hevc', 'h265', 'h264', 'h.264', 'h.265',
-      '1080p', '720p', '480p', '576p', '2160p', '360p',
-      '1080', '720', '576', '480', '360', '2160',
-      'backup', 'temp', 'test', 'mobile', 'high', 'low', 'full', 'fullhd', 'compat'
-    ];
-    for (const kw of defaults) {
-      allKeywords.add(kw);
-    }
-  }
-
-  // Also include general video codecs that are good to strip regardless
-  const codecs = ['hevc', 'h265', 'h264', 'h.264', 'h.265', 'raw'];
-  for (const c of codecs) {
-    allKeywords.add(c);
-  }
-
-  for (const kw of allKeywords) {
-    const escaped = kw.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
-    // Strip keyword as a whole word (using non-alphanumeric boundary check)
-    keywordsToStrip.push(new RegExp('(?:^|[^a-zA-Z0-9])' + escaped + '(?=$|[^a-zA-Z0-9])', 'gi'));
-  }
-  
-  for (const kw of keywordsToStrip) {
-    clean = clean.replace(kw, ' ');
+  for (const matcher of getCompiledQualityMatchers(mappings).stripMatchers) {
+    clean = clean.replace(matcher, ' ');
   }
   return clean.replace(/\s+/g, ' ').trim();
 }
@@ -206,43 +248,8 @@ export function getChannelBaseNamePreserveCase(name: string, mappings?: Record<s
   // 2. Remove country prefixes like "PT:", "ES -", "PT - ", "PT |" case-insensitively
   let clean = mapped.replace(/^[a-zA-Z]{2}\s*[:|-]\s*/, '').trim();
 
-  // 3. Assemble keywords to strip
-  const keywordsToStrip: RegExp[] = [
-    /\[|\]|\(|\)|-|\+|\|/g // remove bracket delimiters
-  ];
-
-  const allKeywords = new Set<string>();
-  if (mappings) {
-    for (const key in mappings) {
-      const labels = mappings[key].split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-      for (const kw of labels) {
-        allKeywords.add(kw);
-      }
-    }
-  } else {
-    const defaults = [
-      'fhd', 'hd', 'sd', '4k', 'uhd', 'raw', 'hevc', 'h265', 'h264', 'h.264', 'h.265',
-      '1080p', '720p', '480p', '576p', '2160p', '360p',
-      '1080', '720', '576', '480', '360', '2160',
-      'backup', 'temp', 'test', 'mobile', 'high', 'low', 'full', 'fullhd', 'compat'
-    ];
-    for (const kw of defaults) {
-      allKeywords.add(kw);
-    }
-  }
-
-  const codecs = ['hevc', 'h265', 'h264', 'h.264', 'h.265', 'raw'];
-  for (const c of codecs) {
-    allKeywords.add(c);
-  }
-
-  for (const kw of allKeywords) {
-    const escaped = kw.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
-    keywordsToStrip.push(new RegExp('(?:^|[^a-zA-Z0-9])' + escaped + '(?=$|[^a-zA-Z0-9])', 'gi'));
-  }
-
-  for (const kw of keywordsToStrip) {
-    clean = clean.replace(kw, ' ');
+  for (const matcher of getCompiledQualityMatchers(mappings).stripMatchers) {
+    clean = clean.replace(matcher, ' ');
   }
 
   return clean.replace(/\s+/g, ' ').trim();
@@ -251,28 +258,9 @@ export function getChannelBaseNamePreserveCase(name: string, mappings?: Record<s
 export function getChannelQualityLabel(name: string, mappings?: Record<string, string>): string {
   const lower = normalizeChannelQualityText(name);
 
-  const defaultMappings: Record<string, string> = {
-    '4K': '4k, 2160p, uhd',
-    'FHD': 'fhd, 1080p, 1080',
-    'HEVC': 'hevc, h265, h.265',
-    'HD': 'hd, 720p, 720',
-    'SD': 'sd, 576p, 480p, 576, 480',
-    'Low': 'low, mobile',
-    'Backup': 'backup'
-  };
-  const activeMappings = { ...defaultMappings, ...(mappings || {}) };
-
-  const order = ['4K', 'FHD', 'HEVC', 'HD', 'SD', 'Low', 'Backup'];
-  for (const key of order) {
-    const labelsStr = activeMappings[key];
-    if (!labelsStr) continue;
-    const labels = labelsStr.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-    for (const label of labels) {
-      const escaped = label.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
-      const regex = new RegExp('(?:^|[^a-zA-Z0-9])' + escaped + '(?=$|[^a-zA-Z0-9])');
-      if (regex.test(lower)) {
-        return key;
-      }
+  for (const { label, matchers } of getCompiledQualityMatchers(mappings).labelMatchers) {
+    for (const matcher of matchers) {
+      if (matcher.test(lower)) return label;
     }
   }
 

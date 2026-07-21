@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import type { StorageInfo, UiTheme } from '../types';
+import type { AppLanguage, StorageInfo, UiTheme } from '../types';
+import { DiagnosticsTab } from './DiagnosticsTab';
 import {
   DEFAULT_QUALITY_MAPPINGS,
   findDuplicateQualityKeywords,
@@ -16,8 +17,11 @@ export interface SettingsSavePayload {
   historyRetentionDays: number;
   discordRpcEnabled: boolean;
   discordShowChannel: boolean;
+  discordShowProgram: boolean;
+  discordShowArtwork: boolean;
   discordClientId: string;
   appearance: UiTheme;
+  language: AppLanguage;
   recordingDirectory: string;
 }
 
@@ -30,8 +34,11 @@ interface SettingsTabProps {
   initialHistoryRetentionDays: number;
   initialDiscordRpcEnabled: boolean;
   initialDiscordShowChannel: boolean;
+  initialDiscordShowProgram: boolean;
+  initialDiscordShowArtwork: boolean;
   initialDiscordClientId: string;
   initialAppearance: UiTheme;
+  initialLanguage: AppLanguage;
   initialRecordingDirectory: string;
   cacheStatus: string;
   guideStatus: string;
@@ -57,8 +64,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = (props) => {
   const {
     initialPlaylistUrl, initialEpgUrl, initialQualityMappings, initialAutoRefreshHours,
     initialAutoplayLastChannel, initialHistoryRetentionDays,
-    initialDiscordRpcEnabled, initialDiscordShowChannel, initialDiscordClientId,
-    initialAppearance, initialRecordingDirectory, cacheStatus, guideStatus, statusText,
+    initialDiscordRpcEnabled, initialDiscordShowChannel, initialDiscordShowProgram, initialDiscordShowArtwork, initialDiscordClientId,
+    initialAppearance, initialLanguage, initialRecordingDirectory, cacheStatus, guideStatus, statusText,
     isLoading, storageInfo, favoritesCount, recentCount, onSave, onSaveAndRefresh,
     onTestSources, onClearCache, onClearHistory, onClearFavorites, onClearRecents,
     onImportBackup, onDirtyChange
@@ -73,7 +80,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = (props) => {
   const [historyRetentionDays, setHistoryRetentionDays] = useState(initialHistoryRetentionDays);
   const [discordRpcEnabled, setDiscordRpcEnabled] = useState(initialDiscordRpcEnabled);
   const [discordShowChannel, setDiscordShowChannel] = useState(initialDiscordShowChannel);
+  const [discordShowProgram, setDiscordShowProgram] = useState(initialDiscordShowProgram);
+  const [discordShowArtwork, setDiscordShowArtwork] = useState(initialDiscordShowArtwork);
   const [appearance, setAppearance] = useState<UiTheme>(initialAppearance);
+  const [language, setLanguage] = useState<AppLanguage>(initialLanguage);
   const [recordingDirectory, setRecordingDirectory] = useState(initialRecordingDirectory);
   const [exportPassword, setExportPassword] = useState('');
   const [exportPasswordConfirmation, setExportPasswordConfirmation] = useState('');
@@ -125,8 +135,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = (props) => {
     historyRetentionDays: Math.max(0, Math.min(3650, Math.round(Number(historyRetentionDays) || 0))),
     discordRpcEnabled,
     discordShowChannel,
+    discordShowProgram,
+    discordShowArtwork,
     discordClientId: initialDiscordClientId.trim(),
     appearance,
+    language,
     recordingDirectory
   });
 
@@ -155,7 +168,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = (props) => {
     setHistoryRetentionDays(initialHistoryRetentionDays);
     setDiscordRpcEnabled(initialDiscordRpcEnabled);
     setDiscordShowChannel(initialDiscordShowChannel);
+    setDiscordShowProgram(initialDiscordShowProgram);
+    setDiscordShowArtwork(initialDiscordShowArtwork);
     setAppearance(initialAppearance);
+    setLanguage(initialLanguage);
     setRecordingDirectory(initialRecordingDirectory);
     setShowPlaylistUrl(false);
     setShowEpgUrl(false);
@@ -249,13 +265,16 @@ export const SettingsTab: React.FC<SettingsTabProps> = (props) => {
 
       <SettingsSection id="appearance" title="Appearance" description="Changes are previewed immediately. Discard restores the saved theme.">
         <div className="segmented-control appearance-segmented" role="radiogroup" aria-label="Application appearance">
-          {(['system', 'light', 'dark'] as const).map(option => <button key={option} type="button" role="radio" aria-checked={appearance === option} className={appearance === option ? 'is-selected' : ''} onClick={() => change(setAppearance, option)} disabled={isBusy}>{option === 'system' ? 'Use Windows setting' : option === 'light' ? 'Light' : 'Dark'}</button>)}
+          {(['system', 'light', 'dark'] as const).map(option => <button key={option} type="button" role="radio" aria-checked={appearance === option} className={appearance === option ? 'is-selected' : ''} onClick={() => change(setAppearance, option)} disabled={isBusy}>{option === 'system' ? 'Use system setting' : option === 'light' ? 'Light' : 'Dark'}</button>)}
         </div>
+        <label className="settings-field"><span>Language</span><select className="text-input" value={language} onChange={(event) => change(setLanguage, event.target.value as AppLanguage)} disabled={isBusy} aria-label="Application language"><option value="system">Use system language</option><option value="pt-PT">Portuguese (Portugal)</option><option value="en">English</option></select></label>
       </SettingsSection>
 
       <SettingsSection id="integrations" title="Integrations" description="Control what Freaky IPTV shares with connected applications.">
         <label className="settings-switch-row"><input type="checkbox" checked={discordRpcEnabled} onChange={(event) => change(setDiscordRpcEnabled, event.target.checked)} disabled={isBusy} /><span><strong>Discord Rich Presence</strong><small>Show that Freaky IPTV is active on your Discord profile.</small></span></label>
         <label className="settings-switch-row" data-disabled={!discordRpcEnabled}><input type="checkbox" checked={discordShowChannel} onChange={(event) => change(setDiscordShowChannel, event.target.checked)} disabled={isBusy || !discordRpcEnabled} /><span><strong>Include the channel name</strong><small>Only enabled while Discord Rich Presence is active.</small></span></label>
+        <label className="settings-switch-row" data-disabled={!discordRpcEnabled}><input type="checkbox" checked={discordShowProgram} onChange={(event) => change(setDiscordShowProgram, event.target.checked)} disabled={isBusy || !discordRpcEnabled} /><span><strong>Include programme title</strong><small>Off by default to keep viewing private.</small></span></label>
+        <label className="settings-switch-row" data-disabled={!discordRpcEnabled}><input type="checkbox" checked={discordShowArtwork} onChange={(event) => change(setDiscordShowArtwork, event.target.checked)} disabled={isBusy || !discordRpcEnabled} /><span><strong>Include channel artwork</strong><small>Artwork is sent through the external images.weserv.nl proxy.</small></span></label>
       </SettingsSection>
 
       <SettingsSection id="data" title="Data & privacy" description="Choose how long local activity is retained, create encrypted backups, or remove data.">
@@ -274,6 +293,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = (props) => {
           <button className="btn-secondary" type="button" disabled={isBusy || favoritesCount === 0} onClick={() => void runDestructiveAction(`Clear ${favoritesCount} favorites`, onClearFavorites, 'Favorites cleared.')}>Clear favorites ({favoritesCount})</button>
           <button className="btn-secondary" type="button" disabled={isBusy || recentCount === 0} onClick={() => void runDestructiveAction(`Clear ${recentCount} recent channels`, onClearRecents, 'Recent channels cleared.')}>Clear recents ({recentCount})</button>
         </div>
+      </SettingsSection>
+
+      <SettingsSection id="diagnostics" title="Diagnostics" description="Inspect local health and export a redacted support report.">
+        <DiagnosticsTab embedded />
       </SettingsSection>
 
       <details className="settings-advanced">

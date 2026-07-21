@@ -1,9 +1,54 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 const readProjectFile = (fileName: string) => readFileSync(join(process.cwd(), fileName), 'utf8');
+
+function loadDispatchReminder() {
+  const source = readProjectFile('main.cjs');
+  const functionSource = source.match(/function dispatchReminder\(reminder\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(functionSource, 'dispatchReminder implementation not found');
+
+  class FakeNotification extends EventEmitter {
+    static isSupported() {
+      return true;
+    }
+
+    show() {
+      this.emit('failed', new Error('simulated Windows notification failure'));
+    }
+  }
+
+  const sent: Array<{ channel: string; payload: Record<string, unknown> }> = [];
+  const loadFunction = new Function(
+    'Notification',
+    'mainWindow',
+    'app',
+    'process',
+    `${functionSource}; return dispatchReminder;`
+  ) as (
+    Notification: typeof FakeNotification,
+    mainWindow: { isDestroyed: () => boolean; webContents: { send: (channel: string, payload: Record<string, unknown>) => void }; flashFrame: (flash: boolean) => void },
+    app: { dock?: { bounce: (type: string) => void } },
+    process: { platform: string }
+  ) => (reminder: Record<string, unknown>) => void;
+
+  return {
+    dispatchReminder: loadFunction(
+      FakeNotification,
+      {
+        isDestroyed: () => false,
+        webContents: { send: (channel, payload) => sent.push({ channel, payload }) },
+        flashFrame: () => {}
+      },
+      {},
+      { platform: 'win32' }
+    ),
+    sent
+  };
+}
 
 type LookupResult = { address: string; family: number };
 type LookupCallback = (
@@ -34,6 +79,28 @@ function loadCreateGuardedLookup(
 }
 
 describe('Electron security contract', () => {
+  it('falls back when a supported native notification emits a failure', () => {
+    const { dispatchReminder, sent } = loadDispatchReminder();
+    dispatchReminder({
+      id: 'channel-1\\u00002026-07-21T15:00:00.000Z',
+      channelId: 'channel-1',
+      programmeStartUtc: '2026-07-21T15:00:00.000Z',
+      programmeTitle: 'Programa das 16h',
+      leadMinutes: 0
+    });
+
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]?.channel, 'reminder-notification');
+    assert.equal(sent[0]?.payload.body, 'Programa das 16h');
+  });
+
+  it('uses the native notification path when the platform supports it', () => {
+    const source = readProjectFile('main.cjs');
+    assert.match(source, /if \(Notification\.isSupported\(\)\)/);
+    assert.match(source, /new Notification\(\{ title, body \}\)/);
+    assert.match(source, /notification\.show\(\)/);
+  });
+
   it('enables renderer isolation and blocks untrusted navigation', () => {
     const source = readProjectFile('main.cjs');
 
@@ -77,7 +144,7 @@ describe('Electron security contract', () => {
     assert.match(source, /const allowPrivateNetwork = false/);
     assert.match(source, /requestRawUrl\(new URL\(location, parsedUrl\)\.toString\(\), redirectCount \+ 1/);
     assert.match(source, /pipeUrl\(new URL\(location, upstreamUrl\)\.toString\(\), redirectCount \+ 1/);
-    assert.match(source, /startPlaybackRelayUpstream\(relay, new URL\(location, upstreamUrl\)\.toString\(\), redirectCount \+ 1\)/);
+    assert.match(source, /openStreamingHttpRequest\(currentUrl, \{\s*allowPrivateNetwork: false,\s*maxRedirects: MAX_REDIRECTS,\s*resolveTarget: resolveNetworkTarget/);
     assert.doesNotMatch(source, /options\.allowPrivateNetwork/);
     assert.match(source, /function startUpstreamRelay\(sourceUrl\)/);
     assert.match(source, /registerTrustedHandle\('start-playback-relay'/);
@@ -108,16 +175,21 @@ describe('Electron security contract', () => {
     assert.match(source, /maxOutputLength:\s*MAX_DECOMPRESSED_TEXT_BYTES/);
   });
 
-  it('redacts stream URLs before logging and keeps Discord opt-in', () => {
+  it('redacts stream URLs before logging and enables the complete Discord presence by default', () => {
     const mainSource = readProjectFile('main.cjs');
     const appSource = readProjectFile('src/App.tsx');
     const playerSource = readProjectFile('src/components/VideoPlayer.tsx');
 
     assert.match(mainSource, /function redactUrlForLogs\(/);
     assert.doesNotMatch(mainSource, /Starting low CPU relay for:\s*\$\{url\}/);
-    assert.doesNotMatch(mainSource, /enabled:\s*true,\s*showChannel/);
+    assert.match(mainSource, /enabled:\s*true,\s*showChannel/);
     assert.doesNotMatch(playerSource, /proxy for URL/);
-    assert.match(appSource, /useState\(false\).*discordRpcEnabled|discordRpcEnabled.*useState\(false\)/s);
+    assert.match(mainSource, /discordRpcEnabled: true/);
+    assert.match(mainSource, /discordShowProgram: true/);
+    assert.match(appSource, /discordShowProgram, setDiscordShowProgram\] = useState\(true\)/);
+    assert.match(mainSource, /DiscordArtworkPreferenceVersion/);
+    assert.match(mainSource, /discordShowArtwork:\s*true/);
+    assert.match(appSource, /discordShowArtwork, setDiscordShowArtwork\] = useState\(true\)/);
   });
 
   it('uses OS-backed settings encryption and only blocks suspension during playback', () => {
@@ -199,10 +271,12 @@ describe('Electron security contract', () => {
     assert.match(mainSource, /registerTrustedHandle\('import-backup'/);
     assert.match(mainSource, /registerTrustedHandle\('capture-playback-frame'/);
     assert.match(mainSource, /registerTrustedHandle\('start-source-recording'/);
+    assert.match(mainSource, /registerTrustedHandle\('get-recording-thumbnail'/);
+    assert.match(mainSource, /notification\.once\('failed', showFallback\)/);
     assert.match(mainSource, /registerTrustedHandle\('start-playback-relay'/);
     assert.match(mainSource, /registerTrustedHandle\('stop-playback-relay'/);
     assert.match(mainSource, /registerTrustedHandle\('get-playback-relay-traffic'/);
-    assert.match(mainSource, /playbackRelays\.get\(request\.relayId\)/);
+    assert.match(mainSource, /const recordingInputUrl = relay \? `\$\{relay\.url\}\?consumer=recording` : request\.sourceUrl/);
     assert.match(mainSource, /registerTrustedHandle\('copy-statistics-card'/);
     assert.match(mainSource, /registerTrustedHandle\('save-statistics-card'/);
     assert.doesNotMatch(mainSource, /registerTrustedHandle\('begin-playback-recording'/);
@@ -210,6 +284,7 @@ describe('Electron security contract', () => {
     assert.match(mainSource, /resolve\(\{\s*ok:\s*true,\s*url:/);
     assert.match(preloadSource, /exportBackup/);
     assert.match(preloadSource, /capturePlaybackFrame/);
+    assert.match(preloadSource, /getRecordingThumbnail/);
     assert.match(preloadSource, /startPlaybackRelay/);
     assert.match(preloadSource, /stopPlaybackRelay/);
     assert.match(preloadSource, /copyStatisticsCard/);

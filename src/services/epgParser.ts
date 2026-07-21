@@ -14,17 +14,16 @@ export async function downloadAndParseEPG(
 }
 
 export function parseEPG(xmlText: string): EpgGuide {
+  if (typeof DOMParser === 'undefined') {
+    throw new Error('XML parsing error: XML parser is unavailable in this process.');
+  }
   const parser = new DOMParser();
   const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
   
   const parserError = xmlDoc.querySelector('parsererror');
   const issues: ParserIssue[] = [];
   if (parserError) {
-    issues.push({
-      sourceType: 'XMLTV',
-      lineNumber: 0,
-      message: 'XML Parsing error: ' + parserError.textContent
-    });
+    throw new Error(`XML parsing error: ${parserError.textContent?.trim() || 'invalid XMLTV document'}`);
   }
 
   const displayNames: Record<string, string> = {};
@@ -139,7 +138,7 @@ export function parseXmlTvDate(value: string): string | null {
   if (!value) return null;
   
   // Format: yyyyMMddHHmmss [+-]HHmm or yyyyMMddHHmmss Z
-  const match = value.trim().match(/^(\d{14})(?:\s*(Z|[+-]\d{2}:?\d{2}|[+-]\d{4}))?/i);
+  const match = value.trim().match(/^(\d{14})(?:\s*(Z|[+-]\d{2}:?\d{2}))?$/i);
   if (!match) return null;
   
   const dateStr = match[1];
@@ -152,14 +151,28 @@ export function parseXmlTvDate(value: string): string | null {
   
   const offsetStr = match[2];
   
+  if (month < 0 || month > 11 || day < 1 || day > 31 || hour > 23 || min > 59 || sec > 59) {
+    return null;
+  }
+
+  const hasValidCalendarDate = (utcMs: number) => {
+    const date = new Date(utcMs);
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month && date.getUTCDate() === day &&
+      date.getUTCHours() === hour && date.getUTCMinutes() === min && date.getUTCSeconds() === sec;
+  };
+
   if (!offsetStr || offsetStr.toUpperCase() === 'Z') {
     if (!offsetStr) {
       // No offset, treat as local time
       const date = new Date(year, month, day, hour, min, sec);
+      if (date.getFullYear() !== year || date.getMonth() !== month || date.getDate() !== day ||
+        date.getHours() !== hour || date.getMinutes() !== min || date.getSeconds() !== sec) return null;
       return date.toISOString();
     } else {
       // Z means UTC
-      const date = new Date(Date.UTC(year, month, day, hour, min, sec));
+      const utcMs = Date.UTC(year, month, day, hour, min, sec);
+      if (!hasValidCalendarDate(utcMs)) return null;
+      const date = new Date(utcMs);
       return date.toISOString();
     }
   }
@@ -169,8 +182,10 @@ export function parseXmlTvDate(value: string): string | null {
   const sign = cleanOffset[0] === '-' ? -1 : 1;
   const offsetHours = parseInt(cleanOffset.slice(1, 3));
   const offsetMins = parseInt(cleanOffset.slice(3, 5)) || 0;
+  if (offsetHours > 14 || offsetMins > 59 || (offsetHours === 14 && offsetMins !== 0)) return null;
   
   const utcTime = Date.UTC(year, month, day, hour, min, sec);
+  if (!hasValidCalendarDate(utcTime)) return null;
   const offsetMs = sign * (offsetHours * 60 + offsetMins) * 60 * 1000;
   const adjustedTime = utcTime - offsetMs;
   

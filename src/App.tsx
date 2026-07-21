@@ -3,11 +3,10 @@ import { Sidebar } from './components/Sidebar';
 import { HomeTab } from './components/HomeTab';
 import { LiveGrid } from './components/LiveGrid';
 import { TvGuideTab } from './components/TvGuideTab';
-import { StatsTab } from './components/StatsTab';
 import { SettingsTab, type SettingsSavePayload } from './components/SettingsTab';
-import { AnnualReview } from './components/AnnualReview';
 import { AboutTab } from './components/AboutTab';
-import type { AvailableReview, Channel, EPGProgram, EpgGuide, AppSettings, WatchSession, CacheSnapshot, StorageInfo, PlaybackSessionEvent, UiTheme } from './types';
+import { RecordingsTab } from './components/RecordingsTab';
+import type { AvailableReview, Channel, EPGProgram, EpgGuide, AppSettings, WatchSession, CacheSnapshot, StorageInfo, PlaybackSessionEvent, UiTheme, AppLanguage, Reminder } from './types';
 import { downloadAndParseM3U } from './services/m3uParser';
 import { downloadAndParseEPG } from './services/epgParser';
 import { computeStats } from './services/statsCalculator';
@@ -17,6 +16,7 @@ import type { ChannelEpgInfo } from './services/epgSchedule';
 import { sha256Short, getChannelBaseName, getChannelBaseNamePreserveCase, getChannelQualityLabel, getQualityScore, normalizeKey } from './services/utils';
 import { DEFAULT_APP_BEHAVIOUR, DEFAULT_QUALITY_MAPPINGS, normalizeQualityMappings, validateSourceUrl } from './services/settingsValidation';
 import { getRelativeChannelIndex, isEditableShortcutTarget, nextVolume } from './services/channelNavigation';
+import { collapseExactUrlDuplicates } from './services/duplicateDetection';
 import { appendOpenedReviewId, computeAvailableReviews, getDisplayReview, normalizeOpenedReviewIds } from './services/reviewCalculator';
 import {
   loadGreetingHistory,
@@ -42,6 +42,8 @@ const EMPTY_UPCOMING: EPGProgram[] = [];
 const VideoPlayer = lazy(() => import('./components/VideoPlayer').then(module => ({
   default: module.VideoPlayer
 })));
+const StatsTab = lazy(() => import('./components/StatsTab').then(module => ({ default: module.StatsTab })));
+const AnnualReview = lazy(() => import('./components/AnnualReview').then(module => ({ default: module.AnnualReview })));
 
 const CACHE_SCHEMA_VERSION = 1;
 const CACHE_PARSER_VERSION = 'react-ts-v1';
@@ -50,7 +52,8 @@ const VOLUME_PERSIST_DEBOUNCE_MS = 400;
 async function finishActiveRecording() {
   const recording = await window.electron.getRecordingState();
   if (recording.status !== 'recording' && recording.status !== 'finalizing') return;
-  if (recording.status === 'recording') await window.electron.stopSourceRecording();
+  // stopSourceRecording returns the in-flight finalization promise as well.
+  await window.electron.stopSourceRecording();
 }
 
 const buildCategoryList = (channelList: Channel[]) => {
@@ -168,7 +171,7 @@ const attachPlaybackVariants = (channel: Channel, groupedChannels: Channel[]): C
 const groupChannelsByQuality = (rawChannels: Channel[], mappings?: Record<string, string>): Channel[] => {
   const groups: Record<string, Channel[]> = {};
   
-  for (const ch of rawChannels) {
+  for (const ch of collapseExactUrlDuplicates(rawChannels)) {
     const baseName = getChannelBaseName(ch.name, mappings) || ch.name;
     const groupKey = `${ch.groupTitle || ''}\u0000${baseName}`;
     const channelWithoutVariants = { ...ch, variants: undefined };
@@ -190,8 +193,19 @@ const groupChannelsByQuality = (rawChannels: Channel[], mappings?: Record<string
     });
 
     const variants = list.map(ch => ({ ...ch }));
+    const contentRevision = sha256Short(
+      variants.map(variant => [
+        variant.id,
+        variant.name,
+        variant.streamUrl,
+        variant.logoUrl,
+        variant.tvgId,
+        variant.groupTitle
+      ].join('\u0000')).join('\u0001')
+    );
     for (const variant of variants) {
       variant.variants = variants;
+      variant.contentRevision = contentRevision;
     }
 
     // The primary channel is the highest quality.
@@ -253,11 +267,14 @@ export const App: React.FC = () => {
   const [autoplayLastChannel, setAutoplayLastChannel] = useState(DEFAULT_APP_BEHAVIOUR.autoplayLastChannel);
   const [historyRetentionDays, setHistoryRetentionDays] = useState(DEFAULT_APP_BEHAVIOUR.historyRetentionDays);
   const [appearance, setAppearance] = useState<UiTheme>('system');
+  const [language, setLanguage] = useState<AppLanguage>('system');
   const [recordingDirectory, setRecordingDirectory] = useState('');
   
   // Discord settings
   const [discordRpcEnabled, setDiscordRpcEnabled] = useState(true);
   const [discordShowChannel, setDiscordShowChannel] = useState(true);
+  const [discordShowProgram, setDiscordShowProgram] = useState(true);
+  const [discordShowArtwork, setDiscordShowArtwork] = useState(true);
   const [discordClientId, setDiscordClientId] = useState('1514411481259577364');
   
   // Channels and EPG guide data
@@ -279,6 +296,7 @@ export const App: React.FC = () => {
 
   // Statistics and history
   const [watchHistory, setWatchHistory] = useState<WatchSession[]>([]);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
   const [stats, setStats] = useState<ComputedStats | null>(null);
   const [epgTickMs, setEpgTickMs] = useState(() => Date.now());
   const [reviewClockMs, setReviewClockMs] = useState(() => Date.now());
@@ -311,6 +329,7 @@ export const App: React.FC = () => {
   const pendingVolumeSaveRef = useRef<(() => Promise<void>) | null>(null);
   const activeChannelRef = useRef<Channel | null>(null);
   const zapPreviewTimerRef = useRef<number | null>(null);
+  const sourceSyncSequenceRef = useRef(0);
 
   useEffect(() => {
     activeChannelRef.current = activeChannel;
@@ -432,7 +451,9 @@ export const App: React.FC = () => {
     currentPlayStartTime,
     qualityMappings,
     discordRpcEnabled,
-    discordShowChannel
+    discordShowChannel,
+    discordShowProgram,
+    discordShowArtwork
   ]);
 
   useEffect(() => {
@@ -492,6 +513,7 @@ export const App: React.FC = () => {
         setAutoplayLastChannel(loadedAutoplayLastChannel);
         setHistoryRetentionDays(loadedHistoryRetentionDays);
         setAppearance(settings.appearance || 'system');
+        setLanguage(settings.language || 'system');
         setRecordingDirectory(settings.recordingDirectory || '');
         const loadedOpenedReviewIds = normalizeOpenedReviewIds(settings.openedReviewIds);
         openedReviewIdsRef.current = loadedOpenedReviewIds;
@@ -501,6 +523,8 @@ export const App: React.FC = () => {
         setDismissedReviewIds(loadedDismissedReviewIds);
         setDiscordRpcEnabled(settings.discordRpcEnabled !== undefined ? settings.discordRpcEnabled : true);
         setDiscordShowChannel(settings.discordShowChannel !== undefined ? settings.discordShowChannel : true);
+        setDiscordShowProgram(settings.discordShowProgram !== false);
+        setDiscordShowArtwork(settings.discordShowArtwork !== false);
         setDiscordClientId(settings.discordClientId || '1514411481259577364');
 
         // B. Load Cache
@@ -555,6 +579,7 @@ export const App: React.FC = () => {
 
         // C. Load History & Compute Stats
         const history: WatchSession[] = await window.electron.loadHistory();
+        setReminders(await window.electron.loadReminders());
         const retainedHistory = pruneWatchHistory(history, loadedHistoryRetentionDays);
         if (retainedHistory.length !== history.length) {
           ensureIpcSuccess(await window.electron.saveHistory(retainedHistory), 'Failed to save pruned history.');
@@ -677,12 +702,6 @@ export const App: React.FC = () => {
     mappingsObj: Record<string, string>,
     behaviour?: Partial<SettingsSavePayload>
   ) => {
-    if (volumeSaveTimerRef.current !== null) {
-      window.clearTimeout(volumeSaveTimerRef.current);
-      volumeSaveTimerRef.current = null;
-      pendingVolumeSaveRef.current = null;
-    }
-
     const settings: AppSettings = {
       playlistUrl: pUrl.trim(),
       epgUrl: eUrl.trim(),
@@ -696,8 +715,11 @@ export const App: React.FC = () => {
       historyRetentionDays: behaviour?.historyRetentionDays ?? historyRetentionDays,
       discordRpcEnabled: behaviour?.discordRpcEnabled ?? discordRpcEnabled,
       discordShowChannel: behaviour?.discordShowChannel ?? discordShowChannel,
+      discordShowProgram: behaviour?.discordShowProgram ?? discordShowProgram,
+      discordShowArtwork: behaviour?.discordShowArtwork ?? discordShowArtwork,
       discordClientId: behaviour?.discordClientId ?? discordClientId,
       appearance: behaviour?.appearance ?? appearance,
+      language: behaviour?.language ?? language,
       recordingDirectory: behaviour?.recordingDirectory ?? recordingDirectory,
       recordingMode: 'source-mkv',
       openedReviewIds: openedReviewIdsRef.current,
@@ -706,7 +728,7 @@ export const App: React.FC = () => {
     ensureIpcSuccess(await window.electron.saveSettings(settings), 'Failed to save settings.');
     settingsVersionRef.current += 1;
     await refreshStorageInfo();
-  }, [appearance, autoRefreshHours, autoplayLastChannel, historyRetentionDays, discordRpcEnabled, discordShowChannel, discordClientId, recordingDirectory, refreshStorageInfo]);
+  }, [appearance, autoRefreshHours, autoplayLastChannel, historyRetentionDays, discordRpcEnabled, discordShowArtwork, discordShowChannel, discordShowProgram, discordClientId, language, recordingDirectory, refreshStorageInfo]);
 
   const handleOpenReview = useCallback(async (review: AvailableReview) => {
     const nextOpenedReviewIds = appendOpenedReviewId(openedReviewIdsRef.current, review.period.key);
@@ -796,10 +818,15 @@ export const App: React.FC = () => {
     targetQualityMappings?: Record<string, string>,
     options: { persistSettings?: boolean } = {}
   ) => {
+    const operationId = ++sourceSyncSequenceRef.current;
+    const isCurrentOperation = () => sourceSyncSequenceRef.current === operationId;
+    const reportStatus = (message: string) => {
+      if (isCurrentOperation()) setStatusText(message);
+    };
     const playlistError = validateSourceUrl(targetPlaylistUrl, true);
     const epgError = validateSourceUrl(targetEpgUrl, false);
     if (playlistError || epgError) {
-      setStatusText(playlistError || epgError || 'Invalid source URL.');
+      reportStatus(playlistError || epgError || 'Invalid source URL.');
       if (navigateToLive) {
         startTransition(() => setActiveSection('Settings'));
       }
@@ -807,28 +834,38 @@ export const App: React.FC = () => {
     }
 
     // A. Download and Parse Playlist
-    setStatusText('Refreshing playlist...');
-    const playlist = await downloadAndParseM3U(targetPlaylistUrl, (s) => setStatusText(s));
+    reportStatus('Refreshing playlist...');
+    const playlist = await downloadAndParseM3U(targetPlaylistUrl, reportStatus);
+    if (!isCurrentOperation()) return;
     
     // B. Download and Parse EPG Guide
     let guide: EpgGuide = { programsByChannel: {}, displayNames: {}, normalizedNames: {}, issues: [] };
     if (targetEpgUrl.trim()) {
       try {
-        setStatusText('Refreshing guide...');
-        guide = await downloadAndParseEPG(targetEpgUrl, (s) => setStatusText(s));
+        reportStatus('Refreshing guide...');
+        guide = await downloadAndParseEPG(targetEpgUrl, reportStatus);
+        if (!isCurrentOperation()) return;
+        if (countEpgPrograms(guide.programsByChannel) === 0) {
+          throw new Error('The TV guide contains no valid programmes.');
+        }
         setGuideStatusText(`Guide refreshed at ${new Date().toLocaleTimeString()}. ${countEpgPrograms(guide.programsByChannel).toLocaleString()} programmes loaded.`);
       } catch (epgErr) {
+        if (!isCurrentOperation()) return;
         console.error('Guide download/parse failed:', epgErr);
-        setGuideStatusText('Guide refresh failed. Existing playlist remains available.');
+        setGuideStatusText('Guide refresh failed. The last valid guide is being kept.');
+        guide = epgGuide;
       }
     } else {
       setGuideStatusText('No guide URL configured.');
     }
 
+    if (!isCurrentOperation()) return;
+
     // Rebuild channels with favorite flags
+    const favoriteIds = new Set(favorites);
     const updatedChannels = playlist.channels.map(ch => ({
       ...ch,
-      isFavorite: favorites.includes(ch.id)
+      isFavorite: favoriteIds.has(ch.id)
     }));
 
     setRawChannels(updatedChannels);
@@ -841,7 +878,7 @@ export const App: React.FC = () => {
     setCategories(buildCategoryList(grouped));
 
     setCacheStatusText(`Playlist refreshed at ${new Date().toLocaleTimeString()}. ${playlist.issues.length} warnings.`);
-    setStatusText(`Refresh complete. ${updatedChannels.length.toLocaleString()} channels available.`);
+    reportStatus(`Refresh complete. ${updatedChannels.length.toLocaleString()} channels available.`);
 
     // C. Save Cache Snapshot
     const snapshot: CacheSnapshot = {
@@ -856,6 +893,7 @@ export const App: React.FC = () => {
       epgNormalizedNameMap: guide.normalizedNames
     };
     ensureIpcSuccess(await window.electron.saveCache(snapshot), 'Failed to save cache.');
+    if (!isCurrentOperation()) return;
 
     // Save settings configuration
     if (options.persistSettings !== false) {
@@ -867,7 +905,7 @@ export const App: React.FC = () => {
     if (navigateToLive) {
       startTransition(() => setActiveSection('Live'));
     }
-  }, [activeChannel?.id, qualityMappings, recentChannelIds, refreshStorageInfo, saveSettingsInternal, volume]);
+  }, [activeChannel?.id, epgGuide, qualityMappings, recentChannelIds, refreshStorageInfo, saveSettingsInternal, volume]);
 
   useEffect(() => {
     refreshSourcesInternalRef.current = refreshSourcesInternal;
@@ -900,8 +938,11 @@ export const App: React.FC = () => {
     setHistoryRetentionDays(payload.historyRetentionDays);
     setDiscordRpcEnabled(payload.discordRpcEnabled);
     setDiscordShowChannel(payload.discordShowChannel);
+    setDiscordShowProgram(payload.discordShowProgram);
+    setDiscordShowArtwork(payload.discordShowArtwork);
     setDiscordClientId(payload.discordClientId);
     setAppearance(payload.appearance);
+    setLanguage(payload.language);
     setRecordingDirectory(payload.recordingDirectory);
 
     const grouped = groupChannelsByQuality(rawChannels, mappingsObj);
@@ -956,6 +997,17 @@ export const App: React.FC = () => {
     await refreshStorageInfo();
   };
 
+  const handleToggleReminder = useCallback(async (channel: Channel, programme: EPGProgram, leadMinutes: Reminder['leadMinutes'] = 10) => {
+    const id = `${channel.id}\u0000${programme.startUtc}`;
+    const existing = reminders.find(reminder => reminder.id === id);
+    const next = existing
+      ? reminders.filter(reminder => reminder.id !== id)
+      : [...reminders, { id, channelId: channel.id, programmeStartUtc: programme.startUtc, programmeTitle: programme.title, leadMinutes }];
+    ensureIpcSuccess(await window.electron.saveReminders(next), 'Failed to save reminder.');
+    setReminders(next);
+    setStatusText(existing ? 'Reminder removed.' : `Reminder set for ${leadMinutes} minutes before ${programme.title}.`);
+  }, [reminders]);
+
   const handleClearFavorites = async () => {
     setFavoriteChannelIds(new Set());
     await saveSettingsInternal(playlistUrl, epgUrl, volume, [], recentChannelIds, activeChannel?.id || '', qualityMappings);
@@ -984,7 +1036,7 @@ export const App: React.FC = () => {
       await finishActiveRecording();
 
       // Close active watch session first
-      await endCurrentSessionRef.current();
+      const previousSessionSave = endCurrentSessionRef.current();
 
       // Open new channel
       setActiveChannel(playbackChannel);
@@ -1023,13 +1075,26 @@ export const App: React.FC = () => {
       setCurrentPlayStartTime(selectedAtUtc);
 
       if (saveState) {
-        await saveSettingsInternal(playlistUrl, epgUrl, volume, Array.from(favoriteChannelIds), updatedRecents, playbackChannel.id, qualityMappings);
+        await Promise.all([
+          previousSessionSave,
+          saveSettingsInternal(playlistUrl, epgUrl, volume, Array.from(favoriteChannelIds), updatedRecents, playbackChannel.id, qualityMappings)
+        ]);
+      } else {
+        await previousSessionSave;
       }
     } catch (err) {
       console.error('Play channel failed:', err);
       setStatusText('Playback failed. Stream could not be opened.');
     }
   }, [channels, epgUrl, favoriteChannelIds, playlistUrl, qualityMappings, recentChannelIds, saveSettingsInternal, volume]);
+
+  useEffect(() => window.electron.onReminderNotification(reminder => {
+    setStatusText(reminder.body || 'Programme reminder.');
+    if (reminder.openChannel) {
+      const channel = playableChannelIndex.channelById.get(reminder.channelId);
+      if (channel) void playChannel(channel);
+    }
+  }), [playChannel, playableChannelIndex]);
 
   useEffect(() => {
     playChannelRef.current = playChannel;
@@ -1125,19 +1190,21 @@ export const App: React.FC = () => {
     activeSessionRef.current = null;
 
     if (durationMs >= 5000) {
-      const updatedHistory = pruneWatchHistory([...watchHistoryRef.current, completedSession], historyRetentionDays);
+      const appendedHistory = [...watchHistoryRef.current, completedSession];
+      const updatedHistory = pruneWatchHistory(appendedHistory, historyRetentionDays);
       watchHistoryRef.current = updatedHistory;
-      setWatchHistory(updatedHistory);
-      setStats(computeStats(updatedHistory, { qualityMappings }));
+      startTransition(() => setWatchHistory(updatedHistory));
 
       try {
-        ensureIpcSuccess(await window.electron.saveHistory(updatedHistory), 'Failed to save history.');
-        await refreshStorageInfo();
+        const saved = updatedHistory.length === appendedHistory.length
+          ? await window.electron.appendHistory(completedSession)
+          : await window.electron.saveHistory(updatedHistory);
+        ensureIpcSuccess(saved, 'Failed to save history.');
       } catch (err) {
         console.error('Failed to save history:', err);
       }
     }
-  }, [historyRetentionDays, qualityMappings, refreshStorageInfo]);
+  }, [historyRetentionDays]);
 
   useEffect(() => {
     endCurrentSessionRef.current = endCurrentSession;
@@ -1190,15 +1257,10 @@ export const App: React.FC = () => {
 
   const handleVolumeChange = useCallback((newVol: number) => {
     setVolume(newVol);
-    pendingVolumeSaveRef.current = () => saveSettingsInternal(
-      playlistUrl,
-      epgUrl,
-      newVol,
-      Array.from(favoriteChannelIds),
-      recentChannelIds,
-      activeChannel?.id || '',
-      qualityMappings
-    );
+    pendingVolumeSaveRef.current = async () => {
+      const result = await window.electron.patchSettings({ volume: newVol });
+      if (!result.ok) throw new Error(result.error || 'Failed to save volume.');
+    };
 
     if (volumeSaveTimerRef.current !== null) {
       window.clearTimeout(volumeSaveTimerRef.current);
@@ -1206,7 +1268,7 @@ export const App: React.FC = () => {
     volumeSaveTimerRef.current = window.setTimeout(() => {
       void flushPendingVolumeSave().catch(err => console.error('Failed to save volume:', err));
     }, VOLUME_PERSIST_DEBOUNCE_MS);
-  }, [activeChannel?.id, epgUrl, favoriteChannelIds, flushPendingVolumeSave, playlistUrl, qualityMappings, recentChannelIds, saveSettingsInternal]);
+  }, [flushPendingVolumeSave]);
 
   useEffect(() => () => {
     if (volumeSaveTimerRef.current !== null) {
@@ -1356,24 +1418,32 @@ export const App: React.FC = () => {
             channels={channels}
             onPlayChannel={playChannel}
             getChannelEpgInfo={getChannelEpgInfo}
+            reminders={reminders}
+            onToggleReminder={handleToggleReminder}
           />
         );
       case 'Stats':
         return stats ? (
-          <StatsTab
-            stats={stats}
-            onRefreshStats={handleRefreshStats}
-            onCopyStatsCard={handleCopyStatsCard}
-            onSaveStatsCard={handleSaveStatsCard}
-          />
+          <Suspense fallback={<div role="status" aria-live="polite" className="app-loading-state">Loading stats dashboard...</div>}>
+            <StatsTab
+              stats={stats}
+              onRefreshStats={handleRefreshStats}
+              onCopyStatsCard={handleCopyStatsCard}
+              onSaveStatsCard={handleSaveStatsCard}
+            />
+          </Suspense>
         ) : (
           <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-secondary)' }}>
             Loading stats dashboard...
           </div>
         );
+      case 'Recordings':
+        return <RecordingsTab />;
       case 'YearReview':
         return annualReview?.annualData ? (
-          <AnnualReview data={annualReview.annualData} onExit={() => handleNavigate('Home')} />
+          <Suspense fallback={<div role="status" aria-live="polite" className="app-loading-state">Loading year review...</div>}>
+            <AnnualReview data={annualReview.annualData} onExit={() => handleNavigate('Home')} />
+          </Suspense>
         ) : null;
       case 'About':
         return <AboutTab />;
@@ -1388,8 +1458,11 @@ export const App: React.FC = () => {
             initialHistoryRetentionDays={historyRetentionDays}
             initialDiscordRpcEnabled={discordRpcEnabled}
             initialDiscordShowChannel={discordShowChannel}
+            initialDiscordShowProgram={discordShowProgram}
+            initialDiscordShowArtwork={discordShowArtwork}
             initialDiscordClientId={discordClientId}
             initialAppearance={appearance}
+            initialLanguage={language}
             initialRecordingDirectory={recordingDirectory}
             cacheStatus={cacheStatusText}
             guideStatus={guideStatusText}

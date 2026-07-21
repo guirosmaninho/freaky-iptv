@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, powerSaveBlocker, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net: electronNet, Notification, powerSaveBlocker, protocol, safeStorage, shell } = require('electron');
 
 if (process.env.FREAKYIPTV_E2E === '1') {
   app.disableHardwareAcceleration();
@@ -21,7 +21,7 @@ const https = require('https');
 const dns = require('dns');
 const zlib = require('zlib');
 const { execSync, spawn, spawnSync } = require('child_process');
-const { fileURLToPath } = require('url');
+const { fileURLToPath, pathToFileURL } = require('url');
 const { autoUpdater } = require('electron-updater');
 const { normalizeHistoryList } = require('./historyStorage.cjs');
 const { decryptBackup, encryptBackup, mergeImportedData, validateBackupPassword } = require('./electron/backupCore.cjs');
@@ -29,6 +29,8 @@ const { getDiscordIpcPaths } = require('./electron/discordRpcCore.cjs');
 const { assertWritableDirectory, clampCaptureBounds, createUniqueMediaPath, decodePngDataUrl, sanitizeFilePart, validatePngBuffer } = require('./electron/mediaCore.cjs');
 const { createPortableReplacementPlan, isSafePortableExecutablePath } = require('./electron/portableUpdate.cjs');
 const { createFileSnapshot, migrateLegacyData, restoreFileSnapshot } = require('./electron/storageCore.cjs');
+const { createDataStore } = require('./electron/dataStore.cjs');
+const { openStreamingHttpRequest } = require('./electron/streamingHttpCore.cjs');
 const { compareVersions, isTrustedGithubAssetUrl, isTrustedGithubRedirectUrl, PROJECT_OWNER, PROJECT_REPOSITORY, selectReleaseCandidate } = require('./electron/updateCore.cjs');
 const { getFfmpegProbeArgs, getFfmpegProxyModes, getNativeRuntimeDirectory, getNextFfmpegProxyMode, resolvePlatformDirectories } = require('./electron/platformCore.cjs');
 
@@ -43,10 +45,12 @@ const PLATFORM_DIRECTORIES = resolvePlatformDirectories({
 const LEGACY_DATA_DIR = PLATFORM_DIRECTORIES.legacyDir;
 const DATA_DIR = PLATFORM_DIRECTORIES.dataDir;
 const CACHE_DIR = path.join(DATA_DIR, 'cache');
+const RECORDING_THUMBNAIL_DIR = path.join(CACHE_DIR, 'recording-thumbnails');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const CACHE_FILE = path.join(CACHE_DIR, 'snapshot.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'watch_history.json');
+const DATABASE_FILE = path.join(DATA_DIR, 'freaky-iptv.sqlite');
 const DEFAULT_RECORDING_DIR = PLATFORM_DIRECTORIES.recordingDir;
 const MAX_TEXT_DOWNLOAD_BYTES = 150 * 1024 * 1024;
 const MAX_DECOMPRESSED_TEXT_BYTES = 150 * 1024 * 1024;
@@ -55,9 +59,12 @@ const MAX_CACHE_PAYLOAD_BYTES = 256 * 1024 * 1024;
 const MAX_HISTORY_PAYLOAD_BYTES = 32 * 1024 * 1024;
 const MAX_URL_LENGTH = 8192;
 const MAX_REDIRECTS = 5;
+const DNS_CACHE_SUCCESS_TTL_MS = 30 * 1000;
+const DNS_CACHE_FAILURE_TTL_MS = 5 * 1000;
 const MAX_DISCORD_PACKET_BYTES = 1024 * 1024;
 const MAX_DISCORD_ASSET_LENGTH = 256;
 const MAX_PNG_BYTES = 16 * 1024 * 1024;
+const MAX_RECORDING_THUMBNAIL_BYTES = 4 * 1024 * 1024;
 const MAX_UPDATE_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const PROJECT_URL = 'https://github.com/guirosmaninho/freaky-iptv';
 const NEW_ISSUE_URL = 'https://github.com/guirosmaninho/freaky-iptv/issues/new';
@@ -65,13 +72,21 @@ const GITHUB_RELEASES_URL = `${PROJECT_URL}/releases/latest`;
 const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${PROJECT_OWNER}/${PROJECT_REPOSITORY}/releases/latest`;
 const ALLOWED_EXTERNAL_URLS = new Set([PROJECT_URL, NEW_ISSUE_URL, GITHUB_RELEASES_URL]);
 const TRUSTED_LOCAL_MEDIA_URLS = new Set();
+const networkDnsCache = new Map();
 
 const migrationStatus = process.env.FREAKYIPTV_E2E === '1'
   ? { migrated: false, status: 'test-isolated', copied: [] }
   : LEGACY_DATA_DIR ? migrateLegacyData({ legacyDir: LEGACY_DATA_DIR, dataDir: DATA_DIR }) : { migrated: false, status: 'not-applicable', copied: [] };
 fs.mkdirSync(CACHE_DIR, { recursive: true });
+fs.mkdirSync(RECORDING_THUMBNAIL_DIR, { recursive: true });
 fs.mkdirSync(BACKUP_DIR, { recursive: true });
 app.setPath('userData', path.join(DATA_DIR, 'electron'));
+const dataStore = createDataStore({
+  dataDir: DATA_DIR,
+  legacyHistoryFile: HISTORY_FILE,
+  legacyCacheFile: CACHE_FILE
+});
+let dataRecoveryNotice = null;
 
 // --- Discord Rich Presence State (declared early so applyDiscordSettings can reference them at startup) ---
 let discordRpcSocket = null;
@@ -80,7 +95,13 @@ let isDiscordConnected = false;
 let isConnecting = false;
 let discordConnectTimeout = null;
 let discordReadBuffer = Buffer.alloc(0);
-let currentDiscordSettings = { enabled: false, showChannel: true, clientId: '1514411481259577364' };
+let currentDiscordSettings = {
+  enabled: true,
+  showChannel: true,
+  showProgram: true,
+  showArtwork: true,
+  clientId: '1514411481259577364'
+};
 let lastActiveChannelName = null;
 let lastActiveChannelStartTime = null;
 let lastActiveChannelLogoUrl = null;
@@ -202,6 +223,7 @@ function normalizeOpenedReviewIds(values) {
 
 function serializeSettingsForDisk(settings) {
   return {
+    SettingsRevision: Number.isSafeInteger(settings.settingsRevision) ? settings.settingsRevision : 0,
     PlaylistUrl: encrypt(settings.playlistUrl),
     EpgUrl: encrypt(settings.epgUrl),
     LastPlayedChannelId: settings.lastPlayedChannelId || '',
@@ -212,10 +234,14 @@ function serializeSettingsForDisk(settings) {
     AutoRefreshHours: settings.autoRefreshHours,
     AutoplayLastChannel: settings.autoplayLastChannel,
     HistoryRetentionDays: settings.historyRetentionDays,
-    DiscordRpcEnabled: settings.discordRpcEnabled !== undefined ? settings.discordRpcEnabled : false,
+    DiscordRpcEnabled: settings.discordRpcEnabled !== undefined ? settings.discordRpcEnabled : true,
     DiscordShowChannel: settings.discordShowChannel !== undefined ? settings.discordShowChannel : true,
+    DiscordShowProgram: settings.discordShowProgram !== undefined ? settings.discordShowProgram : true,
+    DiscordShowArtwork: settings.discordShowArtwork !== undefined ? settings.discordShowArtwork : true,
+    DiscordArtworkPreferenceVersion: 1,
     DiscordClientId: settings.discordClientId || '1514411481259577364',
     Appearance: settings.appearance || 'system',
+    Language: ['system', 'pt-PT', 'en'].includes(settings.language) ? settings.language : 'system',
     RecordingDirectory: settings.recordingDirectory || DEFAULT_RECORDING_DIR,
     RecordingMode: 'source-mkv',
     OpenedReviewIds: normalizeOpenedReviewIds(settings.openedReviewIds),
@@ -241,10 +267,13 @@ function loadSettingsFromFile() {
       autoRefreshHours: 4,
       autoplayLastChannel: true,
       historyRetentionDays: 365,
-      discordRpcEnabled: false,
+      discordRpcEnabled: true,
       discordShowChannel: true,
+      discordShowProgram: true,
+      discordShowArtwork: true,
       discordClientId: '1514411481259577364',
       appearance: 'system',
+      language: 'system',
       recordingDirectory: DEFAULT_RECORDING_DIR,
       recordingMode: 'source-mkv',
       openedReviewIds: [],
@@ -255,7 +284,11 @@ function loadSettingsFromFile() {
     const raw = fs.readFileSync(SETTINGS_FILE, 'utf8');
     const data = JSON.parse(raw);
     
+    const hasDiscordArtworkPreference = data.DiscordArtworkPreferenceVersion === 1;
+    const storedDiscordShowArtwork = data.DiscordShowArtwork;
+
     return {
+      settingsRevision: Number.isSafeInteger(data.SettingsRevision) ? data.SettingsRevision : 0,
       playlistUrl: decrypt(data.PlaylistUrl || data.playlistUrl),
       epgUrl: decrypt(data.EpgUrl || data.epgUrl),
       lastPlayedChannelId: data.LastPlayedChannelId || data.lastPlayedChannelId || '',
@@ -266,10 +299,18 @@ function loadSettingsFromFile() {
       autoRefreshHours: data.AutoRefreshHours !== undefined ? data.AutoRefreshHours : 4,
       autoplayLastChannel: data.AutoplayLastChannel !== undefined ? data.AutoplayLastChannel : true,
       historyRetentionDays: data.HistoryRetentionDays !== undefined ? data.HistoryRetentionDays : 365,
-      discordRpcEnabled: data.DiscordRpcEnabled !== undefined ? data.DiscordRpcEnabled : false,
+      discordRpcEnabled: data.DiscordRpcEnabled !== undefined ? data.DiscordRpcEnabled : true,
       discordShowChannel: data.DiscordShowChannel !== undefined ? data.DiscordShowChannel : true,
+      // Legacy builds did not expose the artwork switch. Restore the previous
+      // behaviour for those settings, while preserving an explicit choice
+      // after the preference version has been written.
+      discordShowProgram: data.DiscordShowProgram !== undefined ? data.DiscordShowProgram : true,
+      discordShowArtwork: hasDiscordArtworkPreference
+        ? storedDiscordShowArtwork === true
+        : storedDiscordShowArtwork !== false,
       discordClientId: data.DiscordClientId || '1514411481259577364',
       appearance: ['system', 'light', 'dark'].includes(data.Appearance) ? data.Appearance : 'system',
+      language: ['system', 'pt-PT', 'en'].includes(data.Language) ? data.Language : 'system',
       recordingDirectory: typeof data.RecordingDirectory === 'string' && data.RecordingDirectory ? data.RecordingDirectory : DEFAULT_RECORDING_DIR,
       recordingMode: 'source-mkv',
       openedReviewIds: normalizeOpenedReviewIds(data.OpenedReviewIds || data.openedReviewIds),
@@ -287,10 +328,13 @@ function loadSettingsFromFile() {
       autoRefreshHours: 4,
       autoplayLastChannel: true,
       historyRetentionDays: 365,
-      discordRpcEnabled: false,
+      discordRpcEnabled: true,
       discordShowChannel: true,
+      discordShowProgram: true,
+      discordShowArtwork: true,
       discordClientId: '1514411481259577364',
       appearance: 'system',
+      language: 'system',
       recordingDirectory: DEFAULT_RECORDING_DIR,
       recordingMode: 'source-mkv',
       openedReviewIds: [],
@@ -306,7 +350,13 @@ registerTrustedHandle('load-settings', () => {
 registerTrustedHandle('save-settings', (event, settings) => {
   try {
     saveSettingsToFile(settings);
-    applyDiscordSettings(settings.discordRpcEnabled, settings.discordShowChannel, settings.discordClientId);
+    applyDiscordSettings(
+      settings.discordRpcEnabled,
+      settings.discordShowChannel,
+      settings.discordShowProgram,
+      settings.discordShowArtwork,
+      settings.discordClientId
+    );
     return true;
   } catch (err) {
     console.error('Failed to save settings:', err);
@@ -314,22 +364,58 @@ registerTrustedHandle('save-settings', (event, settings) => {
   }
 });
 
-registerTrustedHandle('load-cache', () => {
-  if (!fs.existsSync(CACHE_FILE)) return null;
+// Small, serialized preference updates avoid a delayed volume write replacing
+// unrelated settings that were saved in the meantime.
+let settingsPatchQueue = Promise.resolve();
+registerTrustedHandle('patch-settings', async (event, patch) => {
   try {
-    const raw = fs.readFileSync(CACHE_FILE, 'utf8');
-    return JSON.parse(raw);
+    assertPlainObject(patch, 'Settings patch');
+    const allowedKeys = new Set([
+      'volume', 'appearance', 'language', 'discordRpcEnabled',
+      'discordShowChannel', 'discordShowProgram', 'discordShowArtwork'
+    ]);
+    for (const key of Object.keys(patch)) {
+      if (!allowedKeys.has(key)) throw new TypeError(`Unsupported settings patch '${key}'.`);
+    }
+
+    let saved;
+    const runPatch = settingsPatchQueue.catch(() => {}).then(async () => {
+      const current = loadSettingsFromFile();
+      const next = { ...current, ...patch, settingsRevision: (current.settingsRevision || 0) + 1 };
+      validateSettingsPayload(next);
+      saveSettingsToFile(next);
+      applyDiscordSettings(
+        next.discordRpcEnabled,
+        next.discordShowChannel,
+        next.discordShowProgram,
+        next.discordShowArtwork,
+        next.discordClientId
+      );
+      saved = next;
+    });
+    settingsPatchQueue = runPatch;
+    await runPatch;
+    return { ok: true, settings: saved, revision: saved.settingsRevision };
+  } catch (err) {
+    console.error('Failed to patch settings:', err);
+    return { ok: false, error: err instanceof Error ? err.message : 'Failed to patch settings.' };
+  }
+});
+
+registerTrustedHandle('load-cache', async () => {
+  try {
+    return await dataStore.getCache();
   } catch (err) {
     console.error('Failed to load cache:', err);
     return null;
   }
 });
 
-registerTrustedHandle('save-cache', (event, snapshot) => {
+registerTrustedHandle('save-cache', async (event, snapshot) => {
   try {
     assertPlainObject(snapshot, 'Cache snapshot');
     assertPayloadSize(snapshot, MAX_CACHE_PAYLOAD_BYTES, 'Cache snapshot');
-    writeJsonAtomic(CACHE_FILE, snapshot);
+    await dataStore.setCache(snapshot);
     return true;
   } catch (err) {
     console.error('Failed to save cache:', err);
@@ -337,18 +423,12 @@ registerTrustedHandle('save-cache', (event, snapshot) => {
   }
 });
 
-registerTrustedHandle('load-history', () => {
-  if (!fs.existsSync(HISTORY_FILE)) return [];
+registerTrustedHandle('load-history', async () => {
   try {
-    const raw = fs.readFileSync(HISTORY_FILE, 'utf8');
-    const list = JSON.parse(raw);
-    if (!Array.isArray(list)) return [];
-
+    const list = await dataStore.loadHistory();
     const { cleaned, dirty } = normalizeHistoryList(list);
-
     if (dirty) {
-      console.log(`[History] Cleaned up/normalized ${list.length} -> ${cleaned.length} history entries. Writing clean file...`);
-      writeJsonAtomic(HISTORY_FILE, cleaned);
+      await dataStore.saveHistory(cleaned);
     }
 
     return cleaned;
@@ -358,14 +438,28 @@ registerTrustedHandle('load-history', () => {
   }
 });
 
-registerTrustedHandle('save-history', (event, sessions) => {
+registerTrustedHandle('save-history', async (event, sessions) => {
   try {
     if (!Array.isArray(sessions)) throw new TypeError('History sessions must be an array.');
     assertPayloadSize(sessions, MAX_HISTORY_PAYLOAD_BYTES, 'History sessions');
-    writeJsonAtomic(HISTORY_FILE, sessions);
+    await dataStore.saveHistory(normalizeHistoryList(sessions).cleaned);
     return true;
   } catch (err) {
     console.error('Failed to save watch history:', err);
+    return false;
+  }
+});
+
+registerTrustedHandle('append-history', async (event, session) => {
+  try {
+    assertPlainObject(session, 'History session');
+    assertPayloadSize(session, MAX_HISTORY_PAYLOAD_BYTES, 'History session');
+    const normalized = normalizeHistoryList([session]).cleaned;
+    if (normalized.length !== 1) throw new TypeError('History session is invalid.');
+    await dataStore.appendHistory(normalized[0]);
+    return true;
+  } catch (err) {
+    console.error('Failed to append watch history:', err);
     return false;
   }
 });
@@ -483,6 +577,17 @@ function validateSettingsPayload(settings) {
   }
   if (settings.appearance !== undefined && !['system', 'light', 'dark'].includes(settings.appearance)) {
     throw new TypeError('Appearance must be system, light, or dark.');
+  }
+  if (settings.language !== undefined && !['system', 'pt-PT', 'en'].includes(settings.language)) {
+    throw new TypeError('Language must be system, pt-PT, or en.');
+  }
+  if (settings.volume !== undefined && (!Number.isFinite(settings.volume) || settings.volume < 0 || settings.volume > 100)) {
+    throw new TypeError('Volume must be between 0 and 100.');
+  }
+  for (const key of ['discordRpcEnabled', 'discordShowChannel', 'discordShowProgram', 'discordShowArtwork']) {
+    if (settings[key] !== undefined && typeof settings[key] !== 'boolean') {
+      throw new TypeError(`${key} must be a boolean.`);
+    }
   }
   assertBoundedString(settings.recordingDirectory, 'Recording directory', 4096, true);
   if (settings.recordingDirectory) assertWritableDirectory(settings.recordingDirectory);
@@ -645,7 +750,7 @@ function updateFailure(error) {
   return publishUpdateState({
     status: 'error',
     progress: 0,
-    message: 'Nao foi possivel procurar ou transferir a atualizacao. Tente novamente.'
+    message: 'Unable to check for or download the update. Try again.'
   });
 }
 
@@ -807,7 +912,7 @@ async function checkForManualUpdate() {
       status: 'unsupported',
       target: '',
       progress: 0,
-      message: 'As atualizacoes estao disponiveis apenas numa aplicacao empacotada.'
+      message: 'Updates are only available in a packaged application.'
     });
   }
 
@@ -816,7 +921,7 @@ async function checkForManualUpdate() {
     if (target === 'release-page') {
       const release = await getGithubJson(GITHUB_LATEST_RELEASE_URL);
       if (!release || release.draft || release.prerelease || compareVersions(release.tag_name, app.getVersion()) <= 0) {
-        return publishUpdateState({ status: 'up-to-date', message: 'Ja tem a versao mais recente.' });
+        return publishUpdateState({ status: 'up-to-date', message: 'You already have the latest version.' });
       }
       const version = release.tag_name.replace(/^v/i, '');
       await openReleasePage();
@@ -824,7 +929,7 @@ async function checkForManualUpdate() {
         status: 'available',
         version,
         notes: typeof release.body === 'string' ? release.body.slice(0, 16 * 1024) : '',
-        message: 'Nova versao encontrada. As Releases do GitHub foram abertas no navegador.'
+        message: 'New version found. GitHub Releases were opened in your browser.'
       });
     }
 
@@ -832,27 +937,27 @@ async function checkForManualUpdate() {
       const release = await getGithubJson(GITHUB_LATEST_RELEASE_URL);
       const candidate = selectReleaseCandidate(release, app.getVersion(), 'portable');
       if (!candidate) {
-        return publishUpdateState({ status: 'up-to-date', message: 'Ja tem a versao mais recente.' });
+        return publishUpdateState({ status: 'up-to-date', message: 'You already have the latest version.' });
       }
       return publishUpdateState({
         status: 'available',
         version: candidate.version,
         notes: candidate.notes,
         asset: candidate.asset,
-        message: 'Atualizacao disponivel.'
+        message: 'Update available.'
       });
     }
 
     const result = await autoUpdater.checkForUpdates();
     const version = result?.updateInfo?.version;
     if (!version || compareVersions(version, app.getVersion()) <= 0) {
-      return publishUpdateState({ status: 'up-to-date', message: 'Ja tem a versao mais recente.' });
+      return publishUpdateState({ status: 'up-to-date', message: 'You already have the latest version.' });
     }
     return publishUpdateState({
       status: 'available',
       version,
       notes: typeof result.updateInfo.releaseNotes === 'string' ? result.updateInfo.releaseNotes.slice(0, 16 * 1024) : '',
-      message: 'Atualizacao disponivel.'
+      message: 'Update available.'
     });
   } catch (error) {
     return updateFailure(error);
@@ -862,14 +967,14 @@ async function checkForManualUpdate() {
 async function downloadManualUpdate() {
   if (updateState.target === 'release-page') {
     await openReleasePage();
-    return publishUpdateState({ status: 'available', message: 'As Releases do GitHub foram abertas no navegador.' });
+    return publishUpdateState({ status: 'available', message: 'GitHub Releases were opened in your browser.' });
   }
 
   if (updateState.status !== 'available' || !updateState.target) {
-    return publishUpdateState({ status: 'error', message: 'Procure uma atualizacao antes de iniciar a transferencia.' });
+    return publishUpdateState({ status: 'error', message: 'Check for an update before starting the download.' });
   }
 
-  publishUpdateState({ status: 'downloading', progress: 0, message: 'A transferir a atualizacao...' });
+  publishUpdateState({ status: 'downloading', progress: 0, message: 'Downloading the update...' });
   try {
     if (updateState.target === 'portable') {
       const executablePath = process.env.PORTABLE_EXECUTABLE_FILE || '';
@@ -883,12 +988,12 @@ async function downloadManualUpdate() {
         status: 'downloaded',
         downloadedPath,
         progress: 100,
-        message: 'Atualizacao pronta para instalar.'
+        message: 'Update ready to install.'
       });
     }
 
     await autoUpdater.downloadUpdate();
-    return publishUpdateState({ status: 'downloaded', progress: 100, message: 'Atualizacao pronta para instalar.' });
+    return publishUpdateState({ status: 'downloaded', progress: 100, message: 'Update ready to install.' });
   } catch (error) {
     return updateFailure(error);
   }
@@ -896,14 +1001,14 @@ async function downloadManualUpdate() {
 
 function installManualUpdate() {
   if (updateState.target === 'release-page') {
-    return publishUpdateState({ status: 'unsupported', message: 'No macOS, descarregue a nova versao nas Releases do GitHub.' });
+    return publishUpdateState({ status: 'unsupported', message: 'On macOS, download the new version from GitHub Releases.' });
   }
   if (updateState.status !== 'downloaded' || !updateState.target) {
-    return publishUpdateState({ status: 'error', message: 'A atualizacao ainda nao esta pronta para instalar.' });
+    return publishUpdateState({ status: 'error', message: 'The update is not ready to install yet.' });
   }
 
   if (updateState.target === 'nsis') {
-    publishUpdateState({ status: 'installing', message: 'A reiniciar para instalar a atualizacao...' });
+    publishUpdateState({ status: 'installing', message: 'Restarting to install the update...' });
     autoUpdater.quitAndInstall(false, true);
     return getPublicUpdateState();
   }
@@ -925,7 +1030,7 @@ function installManualUpdate() {
       windowsHide: true
     });
     helper.unref();
-    publishUpdateState({ status: 'installing', message: 'A reiniciar para instalar a atualizacao...' });
+    publishUpdateState({ status: 'installing', message: 'Restarting to install the update...' });
     app.quit();
     return getPublicUpdateState();
   } catch (error) {
@@ -958,10 +1063,13 @@ function registerTrustedOn(channel, handler) {
   });
 }
 
-registerTrustedHandle('get-storage-info', () => {
+registerTrustedHandle('get-storage-info', async () => {
   const settingsInfo = getFileStorageInfo(SETTINGS_FILE);
   const cacheInfo = getFileStorageInfo(CACHE_FILE);
   const historyInfo = getFileStorageInfo(HISTORY_FILE);
+  const databaseInfo = getFileStorageInfo(DATABASE_FILE);
+  let databaseHealth = null;
+  try { databaseHealth = await dataStore.storageHealth(); } catch {}
 
   return {
     dataDir: DATA_DIR,
@@ -973,13 +1081,16 @@ registerTrustedHandle('get-storage-info', () => {
     historyBytes: historyInfo.bytes,
     cacheUpdatedAtUtc: cacheInfo.updatedAtUtc,
     historyUpdatedAtUtc: historyInfo.updatedAtUtc,
+    databaseBytes: databaseInfo.bytes,
+    databaseHealth,
+    recoveryNotice: dataRecoveryNotice,
     migrationStatus
   };
 });
 
-registerTrustedHandle('clear-cache', () => {
+registerTrustedHandle('clear-cache', async () => {
   try {
-    fs.rmSync(CACHE_FILE, { force: true });
+    await dataStore.clearCache();
     return true;
   } catch (err) {
     console.error('Failed to clear cache:', err);
@@ -987,9 +1098,9 @@ registerTrustedHandle('clear-cache', () => {
   }
 });
 
-registerTrustedHandle('clear-history', () => {
+registerTrustedHandle('clear-history', async () => {
   try {
-    writeJsonAtomic(HISTORY_FILE, []);
+    await dataStore.clearHistory();
     return true;
   } catch (err) {
     console.error('Failed to clear watch history:', err);
@@ -997,21 +1108,112 @@ registerTrustedHandle('clear-history', () => {
   }
 });
 
-function readHistoryFromFile() {
-  if (!fs.existsSync(HISTORY_FILE)) return [];
-  const parsed = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
-  return Array.isArray(parsed) ? normalizeHistoryList(parsed).cleaned : [];
+const reminderTimers = new Map();
+const MAX_REMINDER_TIMEOUT_MS = 0x7fffffff;
+
+function validateReminder(reminder) {
+  assertPlainObject(reminder, 'Reminder');
+  assertBoundedString(reminder.id, 'Reminder id', 160);
+  assertBoundedString(reminder.channelId, 'Reminder channel id', 1024);
+  assertBoundedString(reminder.programmeStartUtc, 'Reminder programme start', 64);
+  assertBoundedString(reminder.programmeTitle, 'Reminder programme title', 512, true);
+  if (![0, 5, 10, 15, 30].includes(reminder.leadMinutes)) throw new TypeError('Invalid reminder lead time.');
+  if (!Number.isFinite(new Date(reminder.programmeStartUtc).getTime())) throw new TypeError('Invalid reminder programme start.');
 }
+
+function dispatchReminder(reminder) {
+  const title = 'Freaky IPTV reminder';
+  const body = reminder.programmeTitle || 'A scheduled programme is about to start.';
+  let fallbackShown = false;
+  const showFallback = () => {
+    if (fallbackShown) return;
+    fallbackShown = true;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('reminder-notification', { ...reminder, title, body });
+      if (process.platform === 'darwin') app.dock?.bounce('informational');
+      else mainWindow.flashFrame(true);
+    }
+  };
+  try {
+    if (Notification.isSupported()) {
+      const notification = new Notification({ title, body });
+      notification.once('failed', showFallback);
+      notification.on('click', () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.show();
+          mainWindow.focus();
+          mainWindow.webContents.send('reminder-notification', { ...reminder, title, body, openChannel: true });
+        }
+      });
+      notification.show();
+      return;
+    }
+  } catch {}
+  showFallback();
+}
+
+function scheduleReminders(reminders) {
+  for (const timer of reminderTimers.values()) clearTimeout(timer);
+  reminderTimers.clear();
+
+  for (const reminder of reminders) {
+    const programmeStart = new Date(reminder.programmeStartUtc).getTime();
+    const leadMinutes = Number(reminder.leadMinutes);
+    const dueAt = programmeStart - leadMinutes * 60_000;
+    if (!Number.isFinite(programmeStart) || ![0, 5, 10, 15, 30].includes(leadMinutes) || !Number.isFinite(dueAt) || dueAt <= Date.now()) {
+      continue;
+    }
+
+    const armReminderTimer = () => {
+      const remaining = dueAt - Date.now();
+      if (remaining <= 0) {
+        reminderTimers.delete(reminder.id);
+        dispatchReminder(reminder);
+        return;
+      }
+
+      reminderTimers.set(reminder.id, setTimeout(armReminderTimer, Math.min(remaining, MAX_REMINDER_TIMEOUT_MS)));
+    };
+
+    armReminderTimer();
+  }
+}
+
+registerTrustedHandle('load-reminders', async () => {
+  const reminders = await dataStore.loadReminders();
+  scheduleReminders(reminders);
+  return reminders;
+});
+
+registerTrustedHandle('save-reminders', async (event, reminders) => {
+  if (!Array.isArray(reminders) || reminders.length > 10000) throw new TypeError('Invalid reminders collection.');
+  for (const reminder of reminders) validateReminder(reminder);
+  await dataStore.saveReminders(reminders);
+  scheduleReminders(reminders);
+  return true;
+});
 
 function createSafetySnapshot() {
   fs.mkdirSync(BACKUP_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const snapshotDir = path.join(BACKUP_DIR, `pre-import-${stamp}`);
-  return createFileSnapshot([SETTINGS_FILE, HISTORY_FILE], snapshotDir);
+  return createFileSnapshot([SETTINGS_FILE, HISTORY_FILE, DATABASE_FILE], snapshotDir);
 }
 
 function restoreSafetySnapshot(snapshotDir) {
   restoreFileSnapshot(snapshotDir);
+}
+
+async function pruneSafetySnapshots() {
+  const entries = await fs.promises.readdir(BACKUP_DIR, { withFileTypes: true });
+  const snapshots = await Promise.all(entries
+    .filter(entry => entry.isDirectory() && entry.name.startsWith('pre-import-'))
+    .map(async entry => ({ entry, stats: await fs.promises.stat(path.join(BACKUP_DIR, entry.name)) })));
+  snapshots.sort((left, right) => right.stats.mtimeMs - left.stats.mtimeMs);
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  await Promise.all(snapshots.slice(3)
+    .filter(snapshot => snapshot.stats.mtimeMs < cutoff)
+    .map(snapshot => fs.promises.rm(path.join(BACKUP_DIR, snapshot.entry.name), { recursive: true, force: true })));
 }
 
 registerTrustedHandle('select-recording-directory', async () => {
@@ -1065,11 +1267,12 @@ registerTrustedHandle('export-backup', async (event, password) => {
   if (result.canceled || !result.filePath) return { ok: false, canceled: true };
   try {
     const payload = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       appVersion: app.getVersion(),
       createdAtUtc: new Date().toISOString(),
       settings: loadSettingsFromFile(),
-      history: readHistoryFromFile()
+      history: await dataStore.loadHistory(),
+      reminders: await dataStore.loadReminders()
     };
     const envelope = await encryptBackup(payload, password);
     writeJsonAtomic(result.filePath, envelope);
@@ -1094,8 +1297,8 @@ registerTrustedHandle('import-backup', async (event, password) => {
     if (stat.size > 64 * 1024 * 1024) throw new Error('Backup is too large.');
     const envelope = JSON.parse(fs.readFileSync(result.filePaths[0], 'utf8'));
     const imported = await decryptBackup(envelope, password);
-    if (imported.schemaVersion !== 1 || !imported.settings || !Array.isArray(imported.history)) throw new Error('Backup could not be opened.');
-    const current = { settings: loadSettingsFromFile(), history: readHistoryFromFile() };
+    if (![1, 2].includes(imported.schemaVersion) || !imported.settings || !Array.isArray(imported.history)) throw new Error('Backup could not be opened.');
+    const current = { settings: loadSettingsFromFile(), history: await dataStore.loadHistory() };
     const merged = mergeImportedData(current, imported);
     delete merged.settings.preferredStreamMode;
     merged.settings.recordingMode = 'source-mkv';
@@ -1108,9 +1311,20 @@ registerTrustedHandle('import-backup', async (event, password) => {
     assertPayloadSize(merged.history, MAX_HISTORY_PAYLOAD_BYTES, 'Imported history');
     snapshotDir = createSafetySnapshot();
     saveSettingsToFile(merged.settings);
-    writeJsonAtomic(HISTORY_FILE, normalizeHistoryList(merged.history).cleaned);
-    fs.rmSync(CACHE_FILE, { force: true });
-    applyDiscordSettings(merged.settings.discordRpcEnabled, merged.settings.discordShowChannel, merged.settings.discordClientId);
+    await dataStore.saveHistory(normalizeHistoryList(merged.history).cleaned);
+    if (Array.isArray(merged.reminders)) {
+      for (const reminder of merged.reminders) validateReminder(reminder);
+      await dataStore.saveReminders(merged.reminders);
+      scheduleReminders(merged.reminders);
+    }
+    await dataStore.clearCache();
+    applyDiscordSettings(
+      merged.settings.discordRpcEnabled,
+      merged.settings.discordShowChannel,
+      merged.settings.discordShowProgram,
+      merged.settings.discordShowArtwork,
+      merged.settings.discordClientId
+    );
     return { ok: true, settings: merged.settings, historyCount: merged.history.length, requiresSync: true, warnings };
   } catch (error) {
     if (snapshotDir) restoreSafetySnapshot(snapshotDir);
@@ -1190,14 +1404,23 @@ let recordingProcess = null;
 let recordingStopPromise = null;
 let recordingRelayId = null;
 let recordingState = { status: 'idle', mode: null, path: null, startedAtUtc: null, bytes: 0, error: null };
+const recordingIndex = new Map();
+const recordingThumbnailTasks = new Map();
+let recordingPlaybackServer = null;
+
+function publicRecordingState() {
+  const { path: _path, ...safeState } = recordingState;
+  return safeState;
+}
 
 function emitRecordingState(patch = {}) {
   recordingState = { ...recordingState, ...patch };
   if (recordingState.path && fs.existsSync(recordingState.path)) {
     recordingState.bytes = fs.statSync(recordingState.path).size;
   }
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('recording-state-changed', recordingState);
-  return recordingState;
+  const safeState = publicRecordingState();
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('recording-state-changed', safeState);
+  return safeState;
 }
 
 function resolveFfmpegPath() {
@@ -1205,6 +1428,7 @@ function resolveFfmpegPath() {
     const bundled = require('ffmpeg-static');
     const unpacked = bundled.replace('app.asar', 'app.asar.unpacked');
     if (fs.existsSync(unpacked)) return unpacked;
+    if (fs.existsSync(bundled)) return bundled;
   } catch {}
   return 'ffmpeg';
 }
@@ -1227,9 +1451,7 @@ async function stopSourceRecording() {
       settled = true;
       recordingProcess = null;
       recordingStopPromise = null;
-      const completedRelayId = recordingRelayId;
       recordingRelayId = null;
-      if (completedRelayId) stopPlaybackRelay(completedRelayId);
       const failed = forced || (code !== 0 && code !== null);
       resolve(emitRecordingState(failed
         ? { status: 'failed', error: 'FFmpeg could not finalize the recording. The partial file was preserved.' }
@@ -1257,8 +1479,11 @@ registerTrustedHandle('start-source-recording', async (event, request) => {
   if (recordingProcess || recordingStopPromise) return { ok: false, error: 'A recording is already active.' };
   const directory = assertWritableDirectory(loadSettingsFromFile().recordingDirectory || DEFAULT_RECORDING_DIR);
   const outputPath = createUniqueMediaPath(directory, request.channelName, '.mkv');
+  // Prefer the player relay: some IPTV providers allow one connection per
+  // account. The relay remains alive after recording finalisation, so the
+  // player never receives a spurious ended event.
   const relay = request.relayId ? playbackRelays.get(request.relayId) : null;
-  const recordingInputUrl = relay ? relay.url : request.sourceUrl;
+  const recordingInputUrl = relay ? `${relay.url}?consumer=recording` : request.sourceUrl;
   const args = [
     '-hide_banner', '-loglevel', 'warning', '-user_agent', 'VLC/3.0.18 LibVLC/3.0.18',
     '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '4',
@@ -1272,16 +1497,12 @@ registerTrustedHandle('start-source-recording', async (event, request) => {
   proc.once('error', error => {
     if (recordingProcess === proc) recordingProcess = null;
     recordingStopPromise = null;
-    const failedRelayId = recordingRelayId;
     recordingRelayId = null;
-    if (failedRelayId) stopPlaybackRelay(failedRelayId);
     emitRecordingState({ status: 'failed', error: error.message, path: outputPath });
   });
   proc.once('exit', code => {
     if (recordingProcess === proc) recordingProcess = null;
-    const exitedRelayId = recordingRelayId;
     recordingRelayId = null;
-    if (exitedRelayId) stopPlaybackRelay(exitedRelayId);
     if (recordingState.status === 'finalizing') return;
     if (code === 0) {
       emitRecordingState({ status: 'completed', error: null });
@@ -1296,6 +1517,267 @@ registerTrustedHandle('start-source-recording', async (event, request) => {
 registerTrustedHandle('stop-source-recording', () => stopSourceRecording());
 
 registerTrustedHandle('get-recording-state', () => emitRecordingState());
+
+async function scanRecordings() {
+  const root = assertWritableDirectory(loadSettingsFromFile().recordingDirectory || DEFAULT_RECORDING_DIR);
+  const results = [];
+  const visit = async directory => {
+    const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const absolutePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(absolutePath);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.mkv')) {
+        const stats = await fs.promises.stat(absolutePath);
+        const relativePath = path.relative(root, absolutePath);
+        const id = crypto.createHash('sha256').update(relativePath).digest('hex').slice(0, 32);
+        recordingIndex.set(id, {
+          id,
+          root,
+          absolutePath,
+          relativePath,
+          bytes: stats.size,
+          modifiedAtUtc: stats.mtime.toISOString()
+        });
+        results.push({ id, name: entry.name, bytes: stats.size, modifiedAtUtc: stats.mtime.toISOString(), status: 'ready' });
+      }
+    }
+  };
+  recordingIndex.clear();
+  await visit(root);
+  results.sort((a, b) => b.modifiedAtUtc.localeCompare(a.modifiedAtUtc));
+  await dataStore.setRecordings(results);
+  return results;
+}
+
+function resolveRecordingId(id) {
+  assertBoundedString(id, 'Recording id', 64);
+  const entry = recordingIndex.get(id);
+  if (!entry || !fs.existsSync(entry.absolutePath)) throw new Error('Recording was not found. Scan the library again.');
+  return entry;
+}
+
+function recordingThumbnailCachePath(entry) {
+  const cacheKey = crypto.createHash('sha256')
+    .update(`${entry.id}:${entry.bytes}:${entry.modifiedAtUtc}`)
+    .digest('hex');
+  return path.join(RECORDING_THUMBNAIL_DIR, `${cacheKey}.jpg`);
+}
+
+function extractRecordingThumbnail(entry) {
+  const run = (seekSeconds) => new Promise((resolve, reject) => {
+    const process = spawn(resolveFfmpegPath(), [
+      '-hide_banner', '-loglevel', 'error', '-ss', seekSeconds, '-i', entry.absolutePath,
+      '-map', '0:v:0?', '-frames:v', '1', '-vf', 'scale=320:-2', '-q:v', '5',
+      '-an', '-sn', '-dn', '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1'
+    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    const chunks = [];
+    let totalBytes = 0;
+    let settled = false;
+    const fail = error => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
+    process.stdout.on('data', chunk => {
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_RECORDING_THUMBNAIL_BYTES) {
+        try { process.kill(); } catch {}
+        fail(new Error('Recording thumbnail exceeded its size limit.'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    process.once('error', fail);
+    process.once('exit', code => {
+      if (settled) return;
+      if (code !== 0) {
+        fail(new Error('FFmpeg could not extract a recording thumbnail.'));
+        return;
+      }
+      const image = Buffer.concat(chunks);
+      if (image.length === 0) {
+        fail(new Error('Recording does not contain a decodable video frame.'));
+        return;
+      }
+      settled = true;
+      resolve(image);
+    });
+  });
+
+  return (async () => {
+    let lastError = null;
+    for (const seekSeconds of ['2', '0']) {
+      try {
+        return await run(seekSeconds);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error('FFmpeg could not extract a recording thumbnail.');
+  })();
+}
+
+async function loadRecordingThumbnail(entry) {
+  const cachePath = recordingThumbnailCachePath(entry);
+  try {
+    const cached = await fs.promises.readFile(cachePath);
+    if (cached.length > 0 && cached.length <= MAX_RECORDING_THUMBNAIL_BYTES) return cached;
+  } catch {}
+
+  let task = recordingThumbnailTasks.get(cachePath);
+  if (!task) {
+    task = extractRecordingThumbnail(entry);
+    recordingThumbnailTasks.set(cachePath, task);
+    const clearTask = () => {
+      if (recordingThumbnailTasks.get(cachePath) === task) recordingThumbnailTasks.delete(cachePath);
+    };
+    task.then(clearTask, clearTask);
+  }
+  const image = await task;
+  await fs.promises.writeFile(cachePath, image, { flag: 'w' });
+  return image;
+}
+
+registerTrustedHandle('list-recordings', () => scanRecordings());
+registerTrustedHandle('get-recording-playback-url', async (event, id) => {
+  // Refresh the index if the library page has not scanned during this process.
+  if (!recordingIndex.has(id)) await scanRecordings();
+  resolveRecordingId(id);
+  return { ok: true, url: `freaky-recording://${encodeURIComponent(id)}` };
+});
+registerTrustedHandle('get-recording-thumbnail', async (event, id) => {
+  try {
+    if (!recordingIndex.has(id)) await scanRecordings();
+    const entry = resolveRecordingId(id);
+    const image = await loadRecordingThumbnail(entry);
+    return { ok: true, dataUrl: `data:image/jpeg;base64,${image.toString('base64')}` };
+  } catch (error) {
+    console.warn('Failed to generate recording thumbnail:', error?.message || error);
+    return { ok: false, error: 'Unable to generate a preview for this recording.' };
+  }
+});
+
+function stopRecordingPlaybackProxy() {
+  if (!recordingPlaybackServer) return;
+  const server = recordingPlaybackServer;
+  recordingPlaybackServer = null;
+  if (server.freakyIptvTrustedUrl) unregisterTrustedLocalMediaUrl(server.freakyIptvTrustedUrl);
+  try { server.close(); } catch {}
+}
+
+function startRecordingPlaybackProxy(entry) {
+  stopRecordingPlaybackProxy();
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((request, response) => {
+      if (request.method === 'OPTIONS') {
+        writeCorsHeaders(response, { statusCode: 204 });
+        response.end();
+        return;
+      }
+      if (request.method !== 'GET') {
+        writeCorsHeaders(response, { statusCode: 405 });
+        response.end();
+        return;
+      }
+
+      // Chromium cannot decode every MKV codec. Transcode only this local
+      // playback request to fragmented MP4, preserving safe renderer isolation.
+      const process = spawn(resolveFfmpegPath(), [
+        '-hide_banner', '-loglevel', 'warning', '-i', entry.absolutePath,
+        '-map', '0:v:0?', '-map', '0:a:0?', '-c:v', 'libx264', '-preset', 'veryfast',
+        '-pix_fmt', 'yuv420p', '-c:a', getPreferredAacEncoder(), '-movflags',
+        '+frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'
+      ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      let headersSent = false;
+      const beginResponse = () => {
+        if (headersSent) return;
+        headersSent = true;
+        writeCorsHeaders(response, { headers: { 'Content-Type': 'video/mp4', 'Cache-Control': 'no-store' } });
+      };
+      process.stdout.on('data', chunk => {
+        beginResponse();
+        if (!response.write(chunk)) process.stdout.pause(), response.once('drain', () => process.stdout.resume());
+      });
+      process.once('error', () => {
+        if (!headersSent) writeCorsHeaders(response, { statusCode: 500 });
+        response.end();
+      });
+      process.once('exit', () => { if (!response.writableEnded) response.end(); });
+      request.once('close', () => { if (!process.killed) process.kill(); });
+    });
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        server.close();
+        reject(new Error('Could not start the recording playback service.'));
+        return;
+      }
+      recordingPlaybackServer = server;
+      const url = `http://127.0.0.1:${address.port}/recording.mp4`;
+      server.freakyIptvTrustedUrl = url;
+      registerTrustedLocalMediaUrl(url);
+      resolve(url);
+    });
+  });
+}
+
+registerTrustedHandle('start-recording-playback', async (event, id) => {
+  try {
+    if (!recordingIndex.has(id)) await scanRecordings();
+    const entry = resolveRecordingId(id);
+    return { ok: true, url: await startRecordingPlaybackProxy(entry) };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Could not transcode recording for playback.' };
+  }
+});
+registerTrustedHandle('rename-recording', async (event, request) => {
+  assertPlainObject(request, 'Recording rename request');
+  const entry = resolveRecordingId(request.id);
+  assertBoundedString(request.name, 'Recording name', 256);
+  const requested = request.name.trim().replace(/\.mkv$/i, '');
+  const destination = path.join(path.dirname(entry.absolutePath), `${sanitizeFilePart(requested)}.mkv`);
+  if (destination === entry.absolutePath) return { ok: true };
+  if (fs.existsSync(destination)) return { ok: false, error: 'A recording with that name already exists.' };
+  const relativeDestination = path.relative(entry.root, destination);
+  if (relativeDestination.startsWith('..') || path.isAbsolute(relativeDestination)) throw new Error('Invalid recording destination.');
+  await fs.promises.rename(entry.absolutePath, destination);
+  return { ok: true };
+});
+registerTrustedHandle('delete-recording', async (event, id) => {
+  const entry = resolveRecordingId(id);
+  await shell.trashItem(entry.absolutePath);
+  recordingIndex.delete(id);
+  return { ok: true };
+});
+
+function getDiagnosticReport() {
+  return {
+    schemaVersion: 1,
+    exportedAtUtc: new Date().toISOString(),
+    app: { version: app.getVersion(), platform: process.platform, electron: process.versions.electron, node: process.versions.node },
+    storage: { database: dataRecoveryNotice ? 'recovered' : 'healthy', recoveryNotice: dataRecoveryNotice?.message || null },
+    playback: { engines: ['native', 'hls', 'mpegts', 'proxy-copy', 'proxy-hardware'], recording: publicRecordingState().status },
+    privacy: { urlsIncluded: false, tokensIncluded: false, namesIncluded: false },
+    notifications: { nativeSupported: Notification.isSupported() },
+    casting: { available: false, reason: 'Casting adapters are not installed in this build.' }
+  };
+}
+
+registerTrustedHandle('get-diagnostics', async () => ({ ...getDiagnosticReport(), database: await dataStore.storageHealth() }));
+registerTrustedHandle('export-diagnostics', async () => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export diagnostics',
+    defaultPath: path.join(app.getPath('documents'), `freaky-diagnostics-${new Date().toISOString().slice(0, 10)}.json`),
+    filters: [{ name: 'JSON', extensions: ['json'] }]
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  const report = { ...getDiagnosticReport(), database: await dataStore.storageHealth() };
+  await fs.promises.writeFile(result.filePath, JSON.stringify(report, null, 2), 'utf8');
+  return { ok: true };
+});
 
 function parseRawHttpHeaders(headerText) {
   const lines = headerText.split(/\r?\n/);
@@ -1386,12 +1868,26 @@ function assertAllowedNetworkTarget(hostname, allowPrivateNetwork) {
 
 async function resolveNetworkTarget(hostname, allowPrivateNetwork = false) {
   const normalized = assertAllowedNetworkTarget(hostname, allowPrivateNetwork);
-  const addresses = await dns.promises.lookup(normalized, { all: true, verbatim: true });
-  if (addresses.length === 0) throw new Error('The destination host did not resolve.');
-  if (!allowPrivateNetwork && addresses.some(entry => isPrivateNetworkAddress(entry.address))) {
-    throw new Error('Private and local network destinations are blocked.');
+  const cacheKey = `${allowPrivateNetwork ? 'lan' : 'public'}:${normalized}`;
+  const cached = networkDnsCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    if (cached.error) throw new Error(cached.error);
+    return cached.result;
   }
-  return { hostname: normalized, ...addresses[0] };
+  try {
+    const addresses = await dns.promises.lookup(normalized, { all: true, verbatim: true });
+    if (addresses.length === 0) throw new Error('The destination host did not resolve.');
+    if (!allowPrivateNetwork && addresses.some(entry => isPrivateNetworkAddress(entry.address))) {
+      throw new Error('Private and local network destinations are blocked.');
+    }
+    const result = { hostname: normalized, ...addresses[0] };
+    networkDnsCache.set(cacheKey, { result, expiresAt: Date.now() + DNS_CACHE_SUCCESS_TTL_MS });
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The destination host did not resolve.';
+    networkDnsCache.set(cacheKey, { error: message, expiresAt: Date.now() + DNS_CACHE_FAILURE_TTL_MS });
+    throw error;
+  }
 }
 
 function createGuardedLookup(allowPrivateNetwork) {
@@ -1411,7 +1907,7 @@ function createGuardedLookup(allowPrivateNetwork) {
 function redactUrlForLogs(urlText) {
   try {
     const parsed = new URL(urlText);
-    return `${parsed.protocol}//${parsed.host}/ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦`;
+    return `${parsed.protocol}//${parsed.host}/…`;
   } catch {
     return '[redacted-url]';
   }
@@ -1589,13 +2085,93 @@ async function decodeResponseBody(response) {
 }
 
 async function downloadUrlText(url) {
-  const response = await requestRawUrl(url);
+  const response = await requestHttpUrl(url);
   if (response.statusCode < 200 || response.statusCode >= 300) {
     throw new Error(`Failed to download URL. HTTP status: ${response.statusCode}`);
   }
 
   const decoded = await decodeResponseBody(response);
   return decoded.toString('utf8');
+}
+
+async function requestHttpUrl(urlText, redirectCount = 0) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(urlText);
+  } catch {
+    throw new Error('Invalid URL.');
+  }
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new Error('Unsupported URL protocol.');
+
+  // Resolve before connecting and return that exact address from lookup. This
+  // prevents a hostname from being re-resolved to a private address later.
+  const target = await resolveNetworkTarget(parsedUrl.hostname, false);
+  const transport = parsedUrl.protocol === 'https:' ? https : http;
+  const basicAuth = parsedUrl.username
+    ? `Basic ${Buffer.from(`${decodeURIComponent(parsedUrl.username)}:${decodeURIComponent(parsedUrl.password)}`).toString('base64')}`
+    : null;
+
+  return new Promise((resolve, reject) => {
+    const request = transport.request({
+      protocol: parsedUrl.protocol,
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || undefined,
+      path: `${parsedUrl.pathname || '/'}${parsedUrl.search || ''}`,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'FreakyIPTV/1.0',
+        Accept: '*/*',
+        ...(basicAuth ? { Authorization: basicAuth } : {})
+      },
+      lookup: (_hostname, options, callback) => {
+        if (typeof options === 'object' && options?.all) {
+          callback(null, [{ address: target.address, family: target.family }]);
+          return;
+        }
+        callback(null, target.address, target.family);
+      }
+    }, response => {
+      const statusCode = response.statusCode || 0;
+      const location = typeof response.headers.location === 'string' ? response.headers.location : undefined;
+      if (statusCode >= 300 && statusCode < 400 && location) {
+        response.resume();
+        if (redirectCount >= MAX_REDIRECTS) {
+          reject(new Error('Too many redirects.'));
+          return;
+        }
+        const nextUrl = new URL(location, parsedUrl);
+        // HTTP credentials are scoped to one origin and must never follow a
+        // cross-origin redirect.
+        if (nextUrl.origin !== parsedUrl.origin) {
+          nextUrl.username = '';
+          nextUrl.password = '';
+        }
+        resolve(requestHttpUrl(nextUrl.toString(), redirectCount + 1));
+        return;
+      }
+
+      const chunks = [];
+      let byteLength = 0;
+      response.on('data', chunk => {
+        byteLength += chunk.length;
+        if (byteLength > MAX_TEXT_DOWNLOAD_BYTES) {
+          request.destroy(new Error('Downloaded response is too large.'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('end', () => resolve({
+        statusCode,
+        headers: response.headers,
+        body: Buffer.concat(chunks, byteLength),
+        finalUrl: parsedUrl.toString()
+      }));
+      response.on('error', reject);
+    });
+    request.setTimeout(60_000, () => request.destroy(new Error('Timed out downloading URL.')));
+    request.on('error', reject);
+    request.end();
+  });
 }
 
 registerTrustedHandle('download-url-text', async (event, url) => {
@@ -1613,6 +2189,8 @@ const playbackRelays = new Map();
 const playbackRelayBySourceUrl = new Map();
 const PLAYBACK_RELAY_IDLE_MS = 5000;
 const PLAYBACK_RELAY_REPLAY_BYTES = 8 * 1024 * 1024;
+const PLAYBACK_RELAY_RECONNECT_DELAY_MS = 250;
+const PLAYBACK_RELAY_UPSTREAM_TIMEOUT_MS = 8000;
 
 function relayId() {
   playbackRelaySequence += 1;
@@ -1627,15 +2205,19 @@ function closePlaybackRelay(relay) {
     clearTimeout(relay.idleTimer);
     relay.idleTimer = null;
   }
+  if (relay.reconnectTimer) {
+    clearTimeout(relay.reconnectTimer);
+    relay.reconnectTimer = null;
+  }
   for (const client of relay.clients) {
     try {
       if (!client.response.writableEnded) client.response.end();
     } catch {}
   }
   relay.clients.clear();
-  if (relay.upstreamSocket) {
-    try { relay.upstreamSocket.destroy(); } catch {}
-    relay.upstreamSocket = null;
+  if (relay.upstreamResponse) {
+    try { relay.upstreamResponse.destroy(); } catch {}
+    relay.upstreamResponse = null;
   }
   if (relay.server) {
     try { relay.server.close(); } catch {}
@@ -1664,12 +2246,10 @@ function schedulePlaybackRelayIdleCheck(relay) {
     relay.idleTimer = null;
     if (!relay.closed && relay.clients.size === 0 && recordingRelayId !== relay.id && relay.playbackReleased) {
       closePlaybackRelay(relay);
-    } else if (!relay.closed && relay.clients.size === 0 && relay.upstreamSocket) {
-      try { relay.upstreamSocket.destroy(); } catch {}
-      relay.upstreamSocket = null;
+    } else if (!relay.closed && relay.clients.size === 0 && relay.upstreamResponse) {
+      try { relay.upstreamResponse.destroy(); } catch {}
+      relay.upstreamResponse = null;
       relay.connecting = false;
-      relay.headersReady = false;
-      relay.headerBuffer = Buffer.alloc(0);
     }
   }, PLAYBACK_RELAY_IDLE_MS);
 }
@@ -1711,8 +2291,8 @@ function broadcastPlaybackRelayChunk(relay, chunk) {
   let pendingDrains = 0;
   const resumeIfReady = () => {
     pendingDrains -= 1;
-    if (pendingDrains <= 0 && relay.upstreamSocket && !relay.upstreamSocket.destroyed) {
-      relay.upstreamSocket.resume();
+    if (pendingDrains <= 0 && relay.upstreamResponse && !relay.upstreamResponse.destroyed) {
+      relay.upstreamResponse.resume();
     }
   };
 
@@ -1721,13 +2301,14 @@ function broadcastPlaybackRelayChunk(relay, chunk) {
     sendPlaybackRelayHeaders(relay, client);
     if (!client.headersSent || client.response.writableEnded) continue;
     if (!client.response.write(chunk)) {
+      if (client.ignoreBackpressure) continue;
       pendingDrains += 1;
       client.response.once('drain', resumeIfReady);
     }
   }
 
-  if (pendingDrains > 0 && relay.upstreamSocket) {
-    relay.upstreamSocket.pause();
+  if (pendingDrains > 0 && relay.upstreamResponse) {
+    relay.upstreamResponse.pause();
   }
 }
 
@@ -1741,134 +2322,72 @@ function endPlaybackRelayClients(relay) {
   schedulePlaybackRelayIdleCheck(relay);
 }
 
-function startPlaybackRelayUpstream(relay, currentUrl = relay.sourceUrl, redirectCount = 0) {
-  if (relay.closed || relay.connecting || relay.upstreamSocket) return;
+function schedulePlaybackRelayReconnect(relay) {
+  if (relay.closed || relay.reconnectTimer) return;
+  if (relay.clients.size === 0 && recordingRelayId !== relay.id) {
+    schedulePlaybackRelayIdleCheck(relay);
+    return;
+  }
+  relay.reconnectTimer = setTimeout(() => {
+    relay.reconnectTimer = null;
+    startPlaybackRelayUpstream(relay);
+  }, PLAYBACK_RELAY_RECONNECT_DELAY_MS);
+}
+
+function startPlaybackRelayUpstream(relay, currentUrl = relay.sourceUrl) {
+  if (relay.closed || relay.connecting || relay.upstreamResponse) return;
   relay.connecting = true;
-  relay.headersReady = false;
-  relay.headerBuffer = Buffer.alloc(0);
-
-  let upstreamUrl;
-  try {
-    upstreamUrl = new URL(currentUrl);
-  } catch {
-    relay.lastError = 'Invalid upstream URL';
-    endPlaybackRelayClients(relay);
-    relay.connecting = false;
-    return;
-  }
-
-  if (upstreamUrl.protocol !== 'http:' && upstreamUrl.protocol !== 'https:') {
-    relay.lastError = 'Unsupported upstream URL protocol';
-    endPlaybackRelayClients(relay);
-    relay.connecting = false;
-    return;
-  }
-
-  const allowPrivateNetwork = false;
-  let networkHostname;
-  try {
-    networkHostname = assertAllowedNetworkTarget(upstreamUrl.hostname, allowPrivateNetwork);
-  } catch (error) {
-    relay.lastError = error.message;
-    endPlaybackRelayClients(relay);
-    relay.connecting = false;
-    return;
-  }
-
-  const isHttps = upstreamUrl.protocol === 'https:';
-  const port = Number(upstreamUrl.port || (isHttps ? 443 : 80));
-  const requestPath = `${upstreamUrl.pathname || '/'}${upstreamUrl.search || ''}`;
-  const hostHeader = upstreamUrl.port ? `${upstreamUrl.hostname}:${upstreamUrl.port}` : upstreamUrl.hostname;
-  const connectionOptions = {
-    host: networkHostname,
-    port,
-    lookup: createGuardedLookup(allowPrivateNetwork)
-  };
-  const upstreamSocket = isHttps
-    ? tls.connect({
-      ...connectionOptions,
-      servername: net.isIP(networkHostname) ? undefined : networkHostname
-    })
-    : net.createConnection(connectionOptions);
-
-  relay.upstreamSocket = upstreamSocket;
-
-  const sendUpstreamRequest = () => {
-    upstreamSocket.write(
-      `GET ${requestPath} HTTP/1.1\r\n` +
-      `Host: ${hostHeader}\r\n` +
-      `User-Agent: VLC/3.0.18 LibVLC/3.0.18\r\n` +
-      `Connection: close\r\n\r\n`
-    );
-  };
-
-  upstreamSocket.once(isHttps ? 'secureConnect' : 'connect', sendUpstreamRequest);
-
-  upstreamSocket.on('data', (chunk) => {
-    relay.bytesDownloaded += chunk.length;
-    proxyBytesDownloaded = relay.bytesDownloaded;
-
-    if (relay.headersReady) {
-      appendPlaybackRelayReplay(relay, chunk);
-      broadcastPlaybackRelayChunk(relay, chunk);
+  openStreamingHttpRequest(currentUrl, {
+    allowPrivateNetwork: false,
+    maxRedirects: MAX_REDIRECTS,
+    resolveTarget: resolveNetworkTarget,
+    // FFmpeg gives up on the local stream after ten seconds. Reconnect the
+    // remote source first so consumers never need to restart that local URL.
+    timeoutMs: PLAYBACK_RELAY_UPSTREAM_TIMEOUT_MS
+  }).then(response => {
+    if (relay.closed) {
+      response.destroy();
       return;
     }
-
-    relay.headerBuffer = Buffer.concat([relay.headerBuffer, chunk]);
-    const headerEnd = relay.headerBuffer.indexOf('\r\n\r\n');
-    if (headerEnd < 0) {
-      if (relay.headerBuffer.length > 64 * 1024) {
-        upstreamSocket.destroy(new Error('Upstream response headers are too large.'));
-      }
-      return;
-    }
-
-    const headerText = relay.headerBuffer.subarray(0, headerEnd).toString('latin1');
-    const responseMeta = parseRawHttpHeaders(headerText);
-    const location = firstHeaderValue(responseMeta.headers, 'location');
-    if (responseMeta.statusCode >= 300 && responseMeta.statusCode < 400 && location) {
-      if (redirectCount >= MAX_REDIRECTS) {
-        relay.lastError = 'Too many upstream redirects';
-        endPlaybackRelayClients(relay);
-        return;
-      }
-
-      relay.upstreamSocket = null;
-      relay.connecting = false;
-      upstreamSocket.destroy();
-      startPlaybackRelayUpstream(relay, new URL(location, upstreamUrl).toString(), redirectCount + 1);
-      return;
-    }
-
-    relay.statusCode = responseMeta.statusCode || 502;
-    relay.contentType = firstHeaderValue(responseMeta.headers, 'content-type') || 'video/MP2T';
+    relay.upstreamResponse = response;
+    relay.statusCode = response.statusCode || 502;
+    relay.contentType = response.headers['content-type'] || 'video/MP2T';
     relay.headersReady = true;
     relay.connecting = false;
+    relay.lastError = null;
+    for (const client of relay.clients) sendPlaybackRelayHeaders(relay, client);
 
-    const body = relay.headerBuffer.subarray(headerEnd + 4);
-    relay.headerBuffer = Buffer.alloc(0);
-    if (body.length > 0) {
-      appendPlaybackRelayReplay(relay, body);
-      broadcastPlaybackRelayChunk(relay, body);
-    }
-  });
+    let settled = false;
+    const reconnect = error => {
+      if (settled) return;
+      settled = true;
+      if (relay.upstreamResponse === response) relay.upstreamResponse = null;
+      relay.connecting = false;
+      if (error) {
+        relay.lastError = error.message || String(error);
+        console.warn('Playback relay upstream interrupted:', relay.lastError);
+      }
+      // A new connection can start at a different transport-stream boundary.
+      // Do not prepend stale replay data to late-joining consumers.
+      relay.replayChunks = [];
+      relay.replayBytes = 0;
+      schedulePlaybackRelayReconnect(relay);
+    };
 
-  upstreamSocket.on('error', (err) => {
-    relay.lastError = err.message || String(err);
-    console.error('Playback relay upstream failed:', relay.lastError);
-    relay.upstreamSocket = null;
+    response.on('data', chunk => {
+      relay.bytesDownloaded += chunk.length;
+      proxyBytesDownloaded = relay.bytesDownloaded;
+      appendPlaybackRelayReplay(relay, chunk);
+      broadcastPlaybackRelayChunk(relay, chunk);
+    });
+    response.once('error', reconnect);
+    response.once('end', () => reconnect(null));
+    response.once('close', () => reconnect(null));
+  }).catch(error => {
+    relay.lastError = error instanceof Error ? error.message : String(error);
     relay.connecting = false;
-    relay.headersReady = false;
-    relay.headerBuffer = Buffer.alloc(0);
-    endPlaybackRelayClients(relay);
-  });
-
-  upstreamSocket.on('end', () => {
-    relay.upstreamSocket = null;
-    relay.connecting = false;
-    relay.headersReady = false;
-    relay.headerBuffer = Buffer.alloc(0);
-    endPlaybackRelayClients(relay);
+    console.warn('Playback relay could not open upstream:', relay.lastError);
+    schedulePlaybackRelayReconnect(relay);
   });
 }
 
@@ -1883,10 +2402,9 @@ function startPlaybackRelayServer(sourceUrl) {
     url: null,
     server: null,
     clients: new Set(),
-    upstreamSocket: null,
+    upstreamResponse: null,
     connecting: false,
     headersReady: false,
-    headerBuffer: Buffer.alloc(0),
     statusCode: 200,
     contentType: 'video/MP2T',
     bytesDownloaded: 0,
@@ -1894,6 +2412,7 @@ function startPlaybackRelayServer(sourceUrl) {
     replayBytes: 0,
     lastError: null,
     idleTimer: null,
+    reconnectTimer: null,
     playbackReleased: false,
     closed: false
   };
@@ -1917,7 +2436,11 @@ function startPlaybackRelayServer(sourceUrl) {
         relay.idleTimer = null;
       }
 
-      const client = { response: clientRes, headersSent: false, closed: false, needsReplay: relay.headersReady };
+      let isRecordingClient = false;
+      try {
+        isRecordingClient = new URL(clientReq.url || '/', relay.url || 'http://127.0.0.1/').searchParams.get('consumer') === 'recording';
+      } catch {}
+      const client = { response: clientRes, headersSent: false, closed: false, needsReplay: relay.headersReady, ignoreBackpressure: isRecordingClient };
       relay.clients.add(client);
       sendPlaybackRelayHeaders(relay, client);
       startPlaybackRelayUpstream(relay);
@@ -2358,7 +2881,12 @@ registerTrustedHandle('start-vlc-proxy', async (event, url, options = {}) => {
     if (options.relayId && !sharedRelay) {
       throw new Error('The requested playback relay is no longer active.');
     }
-    const relayUrl = sharedRelay ? sharedRelay.url : await startUpstreamRelay(url);
+    // Use the same decoded HTTP relay even when the renderer did not already
+    // create one (for example, a native-player fallback). This prevents the
+    // compatibility engine from ever receiving raw chunked HTTP framing.
+    const relay = sharedRelay || await startPlaybackRelayServer(url);
+    if (!sharedRelay) relay.playbackReleased = true;
+    const relayUrl = relay.url;
     const { spawn } = require('child_process');
     const requestedMode = options && options.mode === 'hardware'
       ? (process.platform === 'darwin' ? 'hardware-videotoolbox' : 'hardware-d3d11')
@@ -2657,8 +3185,25 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  try {
+    const initResult = await dataStore.init();
+    dataRecoveryNotice = initResult?.recoveryNotice || null;
+    scheduleReminders(await dataStore.loadReminders());
+    await pruneSafetySnapshots();
+  } catch (error) {
+    console.error('Failed to initialize the local data store:', error);
+  }
   const { session } = require('electron');
+  protocol.handle('freaky-recording', request => {
+    try {
+      const id = decodeURIComponent(new URL(request.url).hostname);
+      const entry = resolveRecordingId(id);
+      return electronNet.fetch(pathToFileURL(entry.absolutePath).toString());
+    } catch {
+      return new Response('Recording not found.', { status: 404 });
+    }
+  });
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
@@ -2672,7 +3217,13 @@ app.whenReady().then(() => {
 
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
     const url = details.url.toLowerCase();
-    if (url.startsWith('http://') || url.startsWith('https://')) {
+    const isControlledPlaybackRequest =
+      mainWindow &&
+      !mainWindow.isDestroyed() &&
+      details.webContentsId === mainWindow.webContents.id &&
+      (details.resourceType === 'media' || details.resourceType === 'xhr') &&
+      (url.startsWith('http://') || url.startsWith('https://'));
+    if (isControlledPlaybackRequest) {
       details.requestHeaders['User-Agent'] = 'VLC/3.0.18 LibVLC/3.0.18';
       delete details.requestHeaders['Origin'];
       delete details.requestHeaders['Referer'];
@@ -2738,7 +3289,13 @@ app.whenReady().then(() => {
 
   // Initialize Discord RPC settings
   const settings = loadSettingsFromFile();
-  applyDiscordSettings(settings.discordRpcEnabled, settings.discordShowChannel, settings.discordClientId);
+  applyDiscordSettings(
+    settings.discordRpcEnabled,
+    settings.discordShowChannel,
+    settings.discordShowProgram,
+    settings.discordShowArtwork,
+    settings.discordClientId
+  );
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -2754,6 +3311,8 @@ app.on('before-quit', () => {
   cleanupDiscordSocket();
   setPlaybackAwake(false);
   stopVlcProxyProcess();
+  stopRecordingPlaybackProxy();
+  void dataStore.close();
 });
 
 // --- Discord Rich Presence Integration ---
@@ -2965,12 +3524,14 @@ function cleanupDiscordSocket() {
   }
 }
 
-async function applyDiscordSettings(enabled, showChannel, clientId) {
+async function applyDiscordSettings(enabled, showChannel, showProgram, showArtwork, clientId) {
   const oldClientId = currentDiscordSettings.clientId;
   const oldEnabled = currentDiscordSettings.enabled;
 
-  currentDiscordSettings.enabled = enabled !== undefined ? enabled : false;
+  currentDiscordSettings.enabled = enabled !== undefined ? enabled : true;
   currentDiscordSettings.showChannel = showChannel !== undefined ? showChannel : true;
+  currentDiscordSettings.showProgram = showProgram !== undefined ? showProgram : true;
+  currentDiscordSettings.showArtwork = showArtwork !== undefined ? showArtwork : true;
   currentDiscordSettings.clientId = clientId || '1514411481259577364';
 
   if (!currentDiscordSettings.enabled) {
@@ -3065,11 +3626,13 @@ function updateDiscordPresenceForActiveChannel(channelName, startTimeIso, logoUr
   if (!currentDiscordSettings.enabled) return;
 
   const startTime = startTimeIso ? new Date(startTimeIso) : null;
-  const displayState = programTitle || 'Watching Freaky IPTV';
+  const displayState = currentDiscordSettings.showProgram && programTitle
+    ? programTitle
+    : 'Watching Freaky IPTV';
   const displayDetails = currentDiscordSettings.showChannel ? channelName : 'Watching Live TV';
 
-  let proxiedLogoUrl = logoUrl;
-  if (logoUrl && logoUrl.startsWith('http')) {
+  let proxiedLogoUrl = null;
+  if (currentDiscordSettings.showArtwork && logoUrl && logoUrl.startsWith('http')) {
     proxiedLogoUrl = `https://images.weserv.nl/?url=${encodeURIComponent(logoUrl)}&w=512&h=512&fit=contain&output=png`;
   }
 

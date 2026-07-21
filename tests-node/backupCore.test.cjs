@@ -38,7 +38,7 @@ describe('encrypted backups', () => {
   });
 
   it('rejects unsupported schemas and malformed collections', () => {
-    assert.throws(() => validateBackupPayload({ schemaVersion: 2, settings: {}, history: [] }), /could not be opened/i);
+    assert.throws(() => validateBackupPayload({ schemaVersion: 3, settings: {}, history: [] }), /could not be opened/i);
     assert.throws(() => validateBackupPayload({ schemaVersion: 1, settings: {}, history: 'invalid' }), /could not be opened/i);
   });
 });

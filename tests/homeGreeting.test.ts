@@ -237,6 +237,28 @@ describe('home greeting selection', () => {
     assert.ok(greeting.headline.length > 0);
     assert.equal(greeting.action.kind, 'navigate');
   });
+
+  it('indexes channel ids instead of rescanning the lineup for every history entry', () => {
+    const channels = Array.from({ length: 1024 }, (_, index) => channel(`channel-${index}`, `Channel ${index}`));
+    let indexedReads = 0;
+    const observedChannels = new Proxy(channels, {
+      get(target, property, receiver) {
+        if (typeof property === 'string' && /^\d+$/.test(property)) indexedReads += 1;
+        return Reflect.get(target, property, receiver);
+      }
+    });
+    const watchHistory = Array.from({ length: 512 }, (_, index) => {
+      const watched = session('channel-1023', 'Channel 1023', 60_000, index % 20);
+      watched.canonicalChannelId = `canonical-${index}`;
+      return watched;
+    });
+    const context = makeContext({ channels: observedChannels, watchHistory });
+
+    const selection = selectHomeGreetingTemplate(context, [], () => 0);
+
+    assert.equal(selection.family, 'top-channel');
+    assert.ok(indexedReads < 20_000, `Expected indexed channel lookup, read ${indexedReads} channel entries.`);
+  });
 });
 
 describe('home greeting history', () => {

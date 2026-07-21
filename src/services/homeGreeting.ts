@@ -204,8 +204,22 @@ export const getGreetingPeriod = (date: Date): GreetingPeriod => {
 
 const channelIds = (channel: Channel) => [channel.id, ...(channel.variants || []).map(variant => variant.id)];
 
+const channelIndexCache = new WeakMap<Channel[], { length: number; index: Map<string, Channel> }>();
+
+const getChannelIndex = (channels: Channel[]) => {
+  const cached = channelIndexCache.get(channels);
+  if (cached?.length === channels.length) return cached.index;
+
+  const index = new Map<string, Channel>();
+  for (const channel of channels) {
+    for (const id of channelIds(channel)) index.set(id, channel);
+  }
+  channelIndexCache.set(channels, { length: channels.length, index });
+  return index;
+};
+
 const findChannel = (channels: Channel[], id: string) =>
-  channels.find(channel => channelIds(channel).includes(id));
+  getChannelIndex(channels).get(id);
 
 const orderedRecentChannels = (context: HomeGreetingContext) => {
   const result: Channel[] = [];

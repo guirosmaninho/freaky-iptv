@@ -15,6 +15,10 @@ describe('macOS distribution contract', () => {
         artifactName?: string;
         target?: string;
       };
+      dmg?: {
+        background?: string;
+        contents?: Array<{ type?: string; path?: string; x?: number; y?: number }>;
+      };
     };
   };
 
@@ -23,6 +27,11 @@ describe('macOS distribution contract', () => {
     assert.equal(packageJson.build.mac?.forceCodeSigning, false);
     assert.equal(packageJson.build.mac?.icon, 'build-resources/cat_icon.icns');
     assert.equal(packageJson.build.mac?.artifactName, 'Freaky-IPTV-${version}-mac-${arch}.${ext}');
+    assert.equal(packageJson.build.dmg?.background, 'build-resources/dmg-background.png');
+    assert.deepEqual(packageJson.build.dmg?.contents?.map(({ type, path, x, y }) => ({ type, path, x, y })), [
+      { type: 'file', path: undefined, x: 130, y: 220 },
+      { type: 'link', path: '/Applications', x: 410, y: 220 }
+    ]);
     assert.match(packageJson.scripts['build:mac:x64'], /darwin-x64/);
     assert.match(packageJson.scripts['build:mac:arm64'], /darwin-arm64/);
     assert.match(packageJson.scripts['package:mac:x64'], /electron-builder --mac --x64/);

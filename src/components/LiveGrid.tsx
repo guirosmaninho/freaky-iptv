@@ -12,7 +12,7 @@ interface LiveGridProps {
   favoriteChannelIds: Set<string>;
   onPlayChannel: (channel: Channel) => void;
   onToggleFavorite: (channel: Channel) => void;
-  getChannelEpgInfo: (channel: Channel) => { program: EPGProgram | null; progress: number };
+  getChannelEpgInfo: (channel: Channel) => { program: EPGProgram | null; progress: number; upcoming?: EPGProgram[] };
   initialCategory?: string;
   showFavoritesOnly?: boolean;
   qualityMappings?: Record<string, string>;
@@ -38,7 +38,10 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
     () => deferredSearchText.toLowerCase().trim(),
     [deferredSearchText]
   );
-  const filterKey = `${selectedCategory}\u0000${normalizedSearchText}\u0000${showFavoritesOnly}`;
+  const effectiveSelectedCategory = selectedCategory === 'All channels' || categories.includes(selectedCategory)
+    ? selectedCategory
+    : 'All channels';
+  const filterKey = `${effectiveSelectedCategory}\u0000${normalizedSearchText}\u0000${showFavoritesOnly}`;
   const [pagination, setPagination] = useState({ filterKey, visibleCount: INITIAL_VISIBLE_COUNT });
   const visibleCount = pagination.filterKey === filterKey ? pagination.visibleCount : INITIAL_VISIBLE_COUNT;
   
@@ -58,15 +61,20 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
   }, [favoriteChannelIds]);
 
   const filteredChannels = useMemo(() => {
-    const result: Channel[] = [];
     const hasSearch = normalizedSearchText.length > 0;
+
+    if (!showFavoritesOnly && effectiveSelectedCategory === 'All channels' && !hasSearch) {
+      return channels;
+    }
+
+    const result: Channel[] = [];
 
     for (const channel of channels) {
       if (showFavoritesOnly && !isChannelFavorite(channel)) {
         continue;
       }
 
-      if (!showFavoritesOnly && selectedCategory !== 'All channels' && channel.groupTitle !== selectedCategory) {
+      if (!showFavoritesOnly && effectiveSelectedCategory !== 'All channels' && channel.groupTitle !== effectiveSelectedCategory) {
         continue;
       }
 
@@ -83,7 +91,7 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
     }
 
     return result;
-  }, [channels, getChannelEpgInfo, isChannelFavorite, normalizedSearchText, selectedCategory, showFavoritesOnly]);
+  }, [channels, effectiveSelectedCategory, getChannelEpgInfo, isChannelFavorite, normalizedSearchText, showFavoritesOnly]);
 
   const visibleChannels = useMemo(
     () => filteredChannels.slice(0, visibleCount),
@@ -130,23 +138,14 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
         </div>
       </header>
 
-      <div 
-        className="live-toolbar"
-        style={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center', 
-          gap: '16px',
-          flexWrap: 'wrap'
-        }}
-      >
+      <div className="live-toolbar">
         {/* Category Dropdown (only show if not favorites tab) */}
         {!showFavoritesOnly ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div className="live-toolbar__category">
             <label htmlFor="live-category" className="field-label">Category</label>
             <select
               id="live-category"
-              value={selectedCategory}
+              value={effectiveSelectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
               className="text-input"
               style={{
@@ -167,13 +166,29 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
             </select>
           </div>
         ) : (
-          <div style={{ fontSize: '14px', color: 'var(--text-secondary)', fontWeight: 500 }}>
+          <div className="live-toolbar__favorites-note">
             Browse your starred favorite channels.
           </div>
         )}
 
         {/* Search and density controls */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+        <div className="live-toolbar__actions">
+          <div className="search-field live-search-field">
+            <input
+              type="search"
+              aria-label="Search channels or programmes"
+              className="text-input"
+              placeholder="Search channels or programmes..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+            <div aria-hidden="true" className="live-search-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </div>
+          </div>
           <div className="segmented-control density-control" aria-label="Channel card density">
             {(['compact', 'comfortable', 'large'] as const).map(option => (
               <button
@@ -186,31 +201,6 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
                 {option === 'compact' ? 'Compact' : option === 'comfortable' ? 'Comfortable' : 'Large'}
               </button>
             ))}
-          </div>
-
-          {/* Search Box */}
-          <div className="search-field">
-            <input
-              type="search"
-              aria-label="Search channels or programmes"
-              className="text-input"
-              placeholder="Search channels or programmes..."
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              style={{ 
-                width: '100%', 
-                borderRadius: 'var(--radius-control)',
-                paddingLeft: '38px',
-                paddingTop: '10px',
-                paddingBottom: '10px'
-              }}
-            />
-            <div aria-hidden="true" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <circle cx="11" cy="11" r="8" />
-                <line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-            </div>
           </div>
         </div>
       </div>

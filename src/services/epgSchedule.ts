@@ -12,6 +12,11 @@ type ProgramTimeRange = {
   stopMs: number;
 };
 
+type ProgramScheduleIndex = {
+  length: number;
+  prefixMaxStopMs: number[];
+};
+
 const EMPTY_UPCOMING: EPGProgram[] = [];
 
 export const EMPTY_CHANNEL_EPG_INFO: ChannelEpgInfo = {
@@ -22,6 +27,7 @@ export const EMPTY_CHANNEL_EPG_INFO: ChannelEpgInfo = {
 };
 
 const programTimeCache = new WeakMap<EPGProgram, ProgramTimeRange>();
+const programScheduleCache = new WeakMap<EPGProgram[], ProgramScheduleIndex>();
 
 const getProgramTimes = (program: EPGProgram): ProgramTimeRange => {
   const cached = programTimeCache.get(program);
@@ -33,6 +39,23 @@ const getProgramTimes = (program: EPGProgram): ProgramTimeRange => {
   };
   programTimeCache.set(program, times);
   return times;
+};
+
+const getProgramScheduleIndex = (programs: EPGProgram[]): ProgramScheduleIndex => {
+  const cached = programScheduleCache.get(programs);
+  if (cached?.length === programs.length) return cached;
+
+  const prefixMaxStopMs = new Array<number>(programs.length);
+  let maxStopMs = Number.NEGATIVE_INFINITY;
+  for (let index = 0; index < programs.length; index += 1) {
+    const { stopMs } = getProgramTimes(programs[index]);
+    if (Number.isFinite(stopMs)) maxStopMs = Math.max(maxStopMs, stopMs);
+    prefixMaxStopMs[index] = maxStopMs;
+  }
+
+  const scheduleIndex = { length: programs.length, prefixMaxStopMs };
+  programScheduleCache.set(programs, scheduleIndex);
+  return scheduleIndex;
 };
 
 const findProgramIndexAt = (programs: EPGProgram[], nowMs: number) => {
@@ -54,6 +77,10 @@ const findProgramIndexAt = (programs: EPGProgram[], nowMs: number) => {
 
   // Prefer the active entry with the latest start time. If that entry has
   // ended, walk backwards to support gaps and nested overlaps.
+  if (low === 0 || getProgramScheduleIndex(programs).prefixMaxStopMs[low - 1] <= nowMs) {
+    return -1;
+  }
+
   for (let index = low - 1; index >= 0; index--) {
     if (nowMs < getProgramTimes(programs[index]).stopMs) {
       return index;
