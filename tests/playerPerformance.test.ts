@@ -16,7 +16,7 @@ test('keeps player presentation state local and settles fullscreen from the nati
   assert.match(playerSource, /statsTickInFlightRef/);
 });
 
-test('does not animate decoded video geometry or blur the fullscreen HUD', () => {
+test('keeps decoded video geometry stable with a refractive HUD fallback', () => {
   const css = readProjectFile('src/index.css');
   const videoRule = css.match(/\.player-video\s*\{([\s\S]*?)\n\}/)?.[1] || '';
   const finalHudRule = css.slice(css.lastIndexOf('.hud-glass-layer {'));
@@ -27,6 +27,10 @@ test('does not animate decoded video geometry or blur the fullscreen HUD', () =>
   assert.doesNotMatch(css, /\.player-video--immersive[\s\S]*image-rendering:\s*high-quality/);
   assert.match(finalHudRule, /backdrop-filter:\s*none/);
   assert.match(finalHudRule, /-webkit-backdrop-filter:\s*none/);
+  assert.match(
+    css,
+    /@supports\s*\(backdrop-filter:\s*url\("#liquid-glass-refraction"\)\)[\s\S]*\.hud-glass-layer,[\s\S]*backdrop-filter:\s*url\("#liquid-glass-refraction"\)/
+  );
 });
 
 test('does not fight the decoder with gap seeks during startup or display changes', () => {

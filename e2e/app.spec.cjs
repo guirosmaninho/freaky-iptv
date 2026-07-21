@@ -270,10 +270,18 @@ test('zaps with arrow keys, wraps channels, and preserves full app mode', async 
   const compactGlass = await page.locator('.player-shell--compact').evaluate((element) => {
     const style = getComputedStyle(element);
     const alpha = Number(style.backgroundColor.match(/rgba?\([^,]+,\s*[^,]+,\s*[^,]+(?:,\s*([\d.]+))?\)/)?.[1] ?? 1);
-    return { alpha, backdropFilter: style.backdropFilter };
+    const supportsRefractiveFilter = CSS.supports('backdrop-filter: url("#liquid-glass-refraction") blur(2px) saturate(180%)');
+    const prefersReducedTransparency = matchMedia('(prefers-reduced-transparency: reduce)').matches;
+    return { alpha, backdropFilter: style.backdropFilter, supportsRefractiveFilter, prefersReducedTransparency };
   });
   expect(compactGlass.alpha).toBeLessThanOrEqual(0.1);
-  expect(compactGlass.backdropFilter).toBe('none');
+  if (compactGlass.prefersReducedTransparency) {
+    expect(compactGlass.backdropFilter).toBe('none');
+  } else if (compactGlass.supportsRefractiveFilter) {
+    expect(compactGlass.backdropFilter).toContain('liquid-glass-refraction');
+  } else {
+    expect(compactGlass.backdropFilter).toBe('none');
+  }
 
   await page.getByRole('button', { name: /Expand News One player/ }).click();
   await expect(page.locator('.player-shell')).toHaveClass(/player-shell--expanded/);
@@ -282,10 +290,18 @@ test('zaps with arrow keys, wraps channels, and preserves full app mode', async 
   const hudGlass = await page.locator('.hud-glass-layer').evaluate((element) => {
     const style = getComputedStyle(element);
     const alpha = Number(style.backgroundColor.match(/rgba?\([^,]+,\s*[^,]+,\s*[^,]+(?:,\s*([\d.]+))?\)/)?.[1] ?? 1);
-    return { alpha, backdropFilter: style.backdropFilter };
+    const supportsRefractiveFilter = CSS.supports('backdrop-filter: url("#liquid-glass-refraction") blur(2px) saturate(180%)');
+    const prefersReducedTransparency = matchMedia('(prefers-reduced-transparency: reduce)').matches;
+    return { alpha, backdropFilter: style.backdropFilter, supportsRefractiveFilter, prefersReducedTransparency };
   });
   expect(hudGlass.alpha).toBeLessThanOrEqual(0.1);
-  expect(hudGlass.backdropFilter).toBe('none');
+  if (hudGlass.prefersReducedTransparency) {
+    expect(hudGlass.backdropFilter).toBe('none');
+  } else if (hudGlass.supportsRefractiveFilter) {
+    expect(hudGlass.backdropFilter).toContain('liquid-glass-refraction');
+  } else {
+    expect(hudGlass.backdropFilter).toBe('none');
+  }
 
   for (const viewportWidth of [1920, 1500, 1366, 1280, 1200, 1024]) {
     await page.setViewportSize({ width: viewportWidth, height: 720 });

@@ -4651,7 +4651,8 @@ body::before,
     inset 14px 0 30px rgba(89, 185, 255, 0.16),
     inset -14px 0 30px rgba(255, 116, 160, 0.14),
     0 24px 60px rgba(0, 0, 0, 0.24);
-  /* Keep the video and HUD on independent compositor layers. */
+  /* Keep a solid fallback for browsers that cannot resolve the SVG filter.
+     Supported Chromium builds use the refractive override below. */
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -4668,7 +4669,8 @@ body::before,
     inset 14px 0 30px rgba(89, 185, 255, 0.16),
     inset -14px 0 30px rgba(255, 116, 160, 0.14),
     0 24px 60px rgba(0, 0, 0, 0.24);
-  /* Blurring a live video surface forces an expensive compositor pass. */
+  /* Keep a solid fallback for browsers that cannot resolve the SVG filter.
+     Supported Chromium builds use the refractive override below. */
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -4681,6 +4683,20 @@ body::before,
   .liquid-sidebar {
     backdrop-filter: url("#liquid-glass-refraction") blur(16px) saturate(155%);
     -webkit-backdrop-filter: url("#liquid-glass-refraction") blur(16px) saturate(155%);
+  }
+  .hud-glass-layer,
+  .player-shell--compact {
+    backdrop-filter: url("#liquid-glass-refraction") blur(2px) saturate(180%);
+    -webkit-backdrop-filter: url("#liquid-glass-refraction") blur(2px) saturate(180%);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .liquid-sidebar,
+  .hud-glass-layer,
+  .player-shell--compact {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }
 
