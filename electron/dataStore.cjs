@@ -49,6 +49,7 @@ function createDataStore({ dataDir, legacyHistoryFile, legacyCacheFile }) {
     clearCache: () => request('clear-cache'),
     loadHistory: () => request('load-history'),
     saveHistory: sessions => request('save-history', sessions),
+    appendHistory: session => request('append-history', session),
     clearHistory: () => request('clear-history'),
     loadReminders: () => request('load-reminders'),
     saveReminders: reminders => request('save-reminders', reminders),

@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electron', {
   saveCache: (snapshot) => ipcRenderer.invoke('save-cache', snapshot),
   loadHistory: () => ipcRenderer.invoke('load-history'),
   saveHistory: (sessions) => ipcRenderer.invoke('save-history', sessions),
+  appendHistory: (session) => ipcRenderer.invoke('append-history', session),
   getStorageInfo: () => ipcRenderer.invoke('get-storage-info'),
   clearCache: () => ipcRenderer.invoke('clear-cache'),
   clearHistory: () => ipcRenderer.invoke('clear-history'),

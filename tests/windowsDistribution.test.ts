@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
@@ -11,6 +13,8 @@ describe('Windows distribution contract', () => {
     version: string;
     author?: string | { name?: string };
     scripts: Record<string, string>;
+    dependencies: Record<string, string>;
+    devDependencies: Record<string, string>;
     build: {
       appId: string;
       productName: string;
@@ -49,9 +53,21 @@ describe('Windows distribution contract', () => {
     assert.match(mainSource, /getNativeRuntimePath\('libvlc-proxy', executableName\)/);
   });
 
+  it('keeps bundled renderer libraries out of the packaged production dependency tree', () => {
+    for (const dependency of ['react', 'react-dom', 'hls.js', 'mpegts.js']) {
+      assert.equal(packageJson.dependencies[dependency], undefined, `${dependency} must not be packaged twice`);
+      assert.equal(typeof packageJson.devDependencies[dependency], 'string', `${dependency} is required while building the renderer`);
+    }
+
+    for (const dependency of ['electron-updater', 'ffmpeg-static']) {
+      assert.equal(typeof packageJson.dependencies[dependency], 'string', `${dependency} is required by the packaged main process`);
+      assert.equal(packageJson.devDependencies[dependency], undefined);
+    }
+  });
+
   it('builds branded x64 portable and assisted-installer artifacts', () => {
     assert.equal(packageJson.name, 'freaky-iptv');
-    assert.equal(packageJson.version, '1.1.1');
+    assert.equal(packageJson.version, '1.1.2');
     assert.equal(typeof packageJson.author === 'string' ? packageJson.author : packageJson.author?.name, 'Freaky IPTV');
     assert.equal(packageJson.build.appId, 'com.guiro.freakyiptv');
     assert.equal(packageJson.build.productName, 'Freaky IPTV');
@@ -106,8 +122,31 @@ describe('Windows distribution contract', () => {
     assert.match(verifierSource, /GPU process isn't usable/);
   });
 
-  it('preserves the standard backdrop-filter declaration in production CSS', () => {
-    const viteConfig = readProjectFile('vite.config.ts');
-    assert.match(viteConfig, /cssMinify:\s*false/);
+  it('minifies production CSS without dropping either backdrop-filter declaration', () => {
+    const outputDirectory = mkdtempSync(join(tmpdir(), 'freaky-css-build-'));
+
+    try {
+      execFileSync(process.execPath, [
+        join(process.cwd(), 'node_modules', 'vite', 'bin', 'vite.js'),
+        'build',
+        '--outDir', outputDirectory,
+        '--emptyOutDir'
+      ], { cwd: process.cwd(), env: process.env, stdio: 'pipe' });
+
+      const assetDirectory = join(outputDirectory, 'assets');
+      const cssFiles = readdirSync(assetDirectory).filter(fileName => fileName.endsWith('.css'));
+      assert.equal(cssFiles.length, 1);
+
+      const sourceCss = readProjectFile('src/index.css');
+      const productionCss = readFileSync(join(assetDirectory, cssFiles[0]), 'utf8');
+      assert.ok(
+        Buffer.byteLength(productionCss) < Buffer.byteLength(sourceCss) * 0.85,
+        'Expected the production stylesheet to be minified'
+      );
+      assert.match(productionCss, /(?:^|[;}])backdrop-filter:/);
+      assert.match(productionCss, /(?:^|[;}])-webkit-backdrop-filter:/);
+    } finally {
+      rmSync(outputDirectory, { recursive: true, force: true });
+    }
   });
 });

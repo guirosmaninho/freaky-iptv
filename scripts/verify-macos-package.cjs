@@ -84,7 +84,17 @@ async function verifyStartup(appBundle) {
     await page.waitForSelector('.app-shell', { state: 'visible', timeout: 20_000 });
     assert.equal(await page.title(), 'Freaky IPTV');
   } finally {
-    await application?.close();
+    if (application) {
+      // macOS intentionally keeps the Electron process alive after the last
+      // window closes. Quit the main process explicitly so the verifier does
+      // not hang after a successful startup check.
+      try {
+        await application.evaluate(({ app }) => app.quit());
+      } catch {
+        // The process may already have exited after a failed startup.
+      }
+      await application.close();
+    }
     fs.rmSync(temporaryData, { recursive: true, force: true });
   }
 }

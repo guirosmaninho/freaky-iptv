@@ -65,8 +65,13 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
   }, [favoriteChannelIds]);
 
   const filteredChannels = useMemo(() => {
-    const result: Channel[] = [];
     const hasSearch = normalizedSearchText.length > 0;
+
+    if (!showFavoritesOnly && effectiveSelectedCategory === 'All channels' && !hasSearch && !nowOnly && startingSoonMinutes === 0) {
+      return channels;
+    }
+
+    const result: Channel[] = [];
 
     for (const channel of channels) {
       if (showFavoritesOnly && !isChannelFavorite(channel)) {

@@ -440,6 +440,20 @@ registerTrustedHandle('save-history', async (event, sessions) => {
   }
 });
 
+registerTrustedHandle('append-history', async (event, session) => {
+  try {
+    assertPlainObject(session, 'History session');
+    assertPayloadSize(session, MAX_HISTORY_PAYLOAD_BYTES, 'History session');
+    const normalized = normalizeHistoryList([session]).cleaned;
+    if (normalized.length !== 1) throw new TypeError('History session is invalid.');
+    await dataStore.appendHistory(normalized[0]);
+    return true;
+  } catch (err) {
+    console.error('Failed to append watch history:', err);
+    return false;
+  }
+});
+
 function getFileStorageInfo(filePath) {
   try {
     const stats = fs.statSync(filePath);

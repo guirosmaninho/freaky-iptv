@@ -208,6 +208,11 @@ const TvGuideTabComponent: React.FC<TvGuideTabProps> = ({
     setLogoFailedMap(prev => ({ ...prev, [channelId]: true }));
   }, []);
 
+  const handleRowToggleReminder = useCallback(
+    (channel: Channel, programme: EPGProgram) => onToggleReminder(channel, programme, reminderLeadMinutes),
+    [onToggleReminder, reminderLeadMinutes]
+  );
+
   useEffect(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = 0;
@@ -315,7 +320,7 @@ const TvGuideTabComponent: React.FC<TvGuideTabProps> = ({
                     progress={progress}
                     upcoming={upcoming}
                     reminders={reminders}
-                    onToggleReminder={(channel, programme) => onToggleReminder(channel, programme, reminderLeadMinutes)}
+                    onToggleReminder={handleRowToggleReminder}
                   />
                 );
               })}

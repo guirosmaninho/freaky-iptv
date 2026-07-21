@@ -87,6 +87,18 @@ function setValue(key, value) {
   `).run(key, JSON.stringify(value), new Date().toISOString());
 }
 
+function runInTransaction(db, work) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = work();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch {}
+    throw error;
+  }
+}
+
 function migrateJsonIfNeeded(legacyHistoryFile, legacyCacheFile) {
   if (getValue('json-migration-v1-complete', false)) return;
   if (legacyCacheFile && fs.existsSync(legacyCacheFile)) {
@@ -112,29 +124,42 @@ function saveHistory(sessions) {
   const db = ensureDatabase();
   const remove = db.prepare('DELETE FROM history');
   const insert = db.prepare('INSERT INTO history(session_id, started_at_utc, payload) VALUES (?, ?, ?)');
-  const transaction = db.transaction((items) => {
+  runInTransaction(db, () => {
     remove.run();
-    for (let index = 0; index < items.length; index += 1) {
-      const session = items[index];
-      const startedAtUtc = typeof session?.startTime === 'string'
-        ? session.startTime
+    for (let index = 0; index < sessions.length; index += 1) {
+      const session = sessions[index];
+      const startedAtUtc = typeof session?.startTimeUtc === 'string'
+        ? session.startTimeUtc
         : typeof session?.StartTime === 'string' ? session.StartTime : new Date(0).toISOString();
       const sessionId = typeof session?.sessionId === 'string' && session.sessionId
         ? session.sessionId : `${startedAtUtc}:${index}`;
       insert.run(sessionId, startedAtUtc, JSON.stringify(session));
     }
   });
-  transaction(sessions);
+}
+
+function appendHistory(session) {
+  const startedAtUtc = typeof session?.startTimeUtc === 'string'
+    ? session.startTimeUtc
+    : typeof session?.StartTime === 'string' ? session.StartTime : new Date(0).toISOString();
+  const sessionId = typeof session?.sessionId === 'string' && session.sessionId
+    ? session.sessionId : startedAtUtc;
+  ensureDatabase().prepare(`
+    INSERT INTO history(session_id, started_at_utc, payload) VALUES (?, ?, ?)
+    ON CONFLICT(session_id) DO UPDATE SET
+      started_at_utc = excluded.started_at_utc,
+      payload = excluded.payload
+  `).run(sessionId, startedAtUtc, JSON.stringify(session));
 }
 
 function saveReminders(reminders) {
   const db = ensureDatabase();
   const remove = db.prepare('DELETE FROM reminders');
   const insert = db.prepare('INSERT INTO reminders(id, starts_at_utc, payload) VALUES (?, ?, ?)');
-  db.transaction((items) => {
+  runInTransaction(db, () => {
     remove.run();
-    for (const reminder of items) insert.run(reminder.id, reminder.programmeStartUtc, JSON.stringify(reminder));
-  })(reminders);
+    for (const reminder of reminders) insert.run(reminder.id, reminder.programmeStartUtc, JSON.stringify(reminder));
+  });
 }
 
 function handle(action, payload) {
@@ -148,6 +173,7 @@ function handle(action, payload) {
     case 'clear-cache': ensureDatabase().prepare("DELETE FROM kv_store WHERE key = 'cache'").run(); return true;
     case 'load-history': return loadHistory();
     case 'save-history': saveHistory(payload); return true;
+    case 'append-history': appendHistory(payload); return true;
     case 'clear-history': saveHistory([]); return true;
     case 'load-reminders': return ensureDatabase().prepare('SELECT payload FROM reminders ORDER BY starts_at_utc ASC').all().flatMap(row => { try { return [JSON.parse(row.payload)]; } catch { return []; } });
     case 'save-reminders': saveReminders(payload); return true;

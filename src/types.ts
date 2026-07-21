@@ -363,6 +363,7 @@ declare global {
       saveCache: (snapshot: CacheSnapshot) => Promise<boolean>;
       loadHistory: () => Promise<WatchSession[]>;
       saveHistory: (sessions: WatchSession[]) => Promise<boolean>;
+      appendHistory: (session: WatchSession) => Promise<boolean>;
       getStorageInfo: () => Promise<StorageInfo>;
       clearCache: () => Promise<boolean>;
     clearHistory: () => Promise<boolean>;

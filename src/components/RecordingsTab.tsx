@@ -9,6 +9,7 @@ export const RecordingsTab: React.FC = () => {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState<RecordingEntry | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [playbackUrl, setPlaybackUrl] = useState('');
   const [usingCompatibilityPlayer, setUsingCompatibilityPlayer] = useState(false);
   const [opening, setOpening] = useState(false);
@@ -40,11 +41,24 @@ export const RecordingsTab: React.FC = () => {
   }), []);
 
   const openRecording = async (entry: RecordingEntry) => {
+    if (expandedId === entry.id && playing?.id === entry.id) {
+      setExpandedId(null);
+      setPlaying(null);
+      setPlaybackUrl('');
+      setUsingCompatibilityPlayer(false);
+      return;
+    }
+
+    setExpandedId(entry.id);
+    setPlaying(null);
+    setPlaybackUrl('');
+    setUsingCompatibilityPlayer(false);
     setOpening(true);
     setMessage('');
     const result = await window.electron.getRecordingPlaybackUrl(entry.id);
     setOpening(false);
     if (!result.ok || !result.url) {
+      setExpandedId(null);
       setMessage(result.error || 'Não foi possível abrir a gravação.');
       return;
     }
@@ -68,6 +82,15 @@ export const RecordingsTab: React.FC = () => {
     setMessage('');
   };
 
+  const closeRecording = () => {
+    setExpandedId(null);
+    setPlaying(null);
+    setPlaybackUrl('');
+    setUsingCompatibilityPlayer(false);
+    setOpening(false);
+    setMessage('');
+  };
+
   const rename = async (entry: RecordingEntry) => {
     const requested = window.prompt('Nome da gravação', withoutExtension(entry.name));
     if (!requested) return;
@@ -83,59 +106,89 @@ export const RecordingsTab: React.FC = () => {
     if (result.ok) await refresh();
   };
 
+  const totalBytes = recordings.reduce((total, entry) => total + entry.bytes, 0);
+
   return (
     <main className="recordings-library animate-fade">
       <header className="recordings-header">
-        <div>
-          <p className="recordings-kicker">Biblioteca local</p>
+        <div className="recordings-heading-copy">
+          <div className="recordings-kicker-row">
+            <p className="recordings-kicker">Biblioteca local</p>
+            <span className="recordings-count">{recordings.length} {recordings.length === 1 ? 'gravação' : 'gravações'}</span>
+          </div>
           <h2>Gravações</h2>
           <p>Reproduz, organiza e remove as gravações guardadas nesta app.</p>
         </div>
-        <div className="recordings-toolbar">
-          <button type="button" className="btn-secondary" onClick={() => void refresh()} disabled={loading}>{loading ? 'A analisar…' : 'Atualizar'}</button>
-          <button type="button" className="btn-secondary" onClick={() => void window.electron.openRecordingDirectory()}>Abrir pasta</button>
+        <div className="recordings-header-aside">
+          <div className="recordings-summary">
+            <span>Espaço usado</span>
+            <strong>{formatBytes(totalBytes)}</strong>
+          </div>
+          <div className="recordings-toolbar">
+            <button type="button" className="btn-secondary" onClick={() => void refresh()} disabled={loading}>{loading ? 'A analisar…' : 'Atualizar'}</button>
+            <button type="button" className="btn-secondary" onClick={() => void window.electron.openRecordingDirectory()}>Abrir pasta</button>
+          </div>
         </div>
       </header>
 
       {message && <p className="recordings-message" role="status">{message}</p>}
 
-      {playing && playbackUrl && (
-        <section className="recording-player" aria-label={`A reproduzir ${playing.name}`}>
-          <div className="recording-player-header">
-            <div><span>A reproduzir</span><strong title={playing.name}>{withoutExtension(playing.name)}</strong></div>
-            <button type="button" className="btn-secondary" onClick={() => { setPlaying(null); setPlaybackUrl(''); setMessage(''); }}>Fechar</button>
-          </div>
-          <video
-            key={playbackUrl}
-            src={playbackUrl}
-            controls
-            autoPlay
-            playsInline
-            className="recording-player-video"
-            onError={() => {
-              if (usingCompatibilityPlayer) {
-                setMessage('O leitor de compatibilidade não conseguiu abrir esta gravação.');
-                return;
-              }
-              void startCompatibilityPlayer();
-            }}
-          />
-          {opening && <div className="recording-player-loading">A preparar vídeo…</div>}
-          {!usingCompatibilityPlayer && !opening && <button type="button" className="recording-compatibility-link" onClick={() => void startCompatibilityPlayer()}>Este vídeo não abre? Usar leitor de compatibilidade</button>}
-        </section>
-      )}
-
       <section className="recordings-grid" aria-label="Gravações disponíveis">
         {recordings.map(entry => (
-          <article className={`recording-card ${playing?.id === entry.id ? 'is-playing' : ''}`} key={entry.id}>
-            <button type="button" className="recording-card-main" onClick={() => void openRecording(entry)}>
-              <span className="recording-play-icon" aria-hidden="true">▶</span>
-              <span className="recording-card-copy"><strong title={entry.name}>{withoutExtension(entry.name)}</strong><small>{formatBytes(entry.bytes)} · {new Date(entry.modifiedAtUtc).toLocaleString()}</small></span>
-            </button>
-            <div className="recording-card-actions">
-              <button type="button" className="btn-secondary" onClick={() => void rename(entry)}>Renomear</button>
-              <button type="button" className="recording-delete-button" onClick={() => void remove(entry)} aria-label={`Mover ${entry.name} para o Lixo`}>Eliminar</button>
+          <article className={`recording-card ${expandedId === entry.id ? 'is-expanded' : ''} ${playing?.id === entry.id ? 'is-playing' : ''}`} key={entry.id}>
+            <div className="recording-card-row">
+              <button
+                type="button"
+                className="recording-card-main"
+                onClick={() => void openRecording(entry)}
+                aria-expanded={expandedId === entry.id}
+                aria-controls={`recording-panel-${entry.id}`}
+              >
+                <span className={`recording-play-icon ${expandedId === entry.id ? 'is-open' : ''}`} aria-hidden="true">{expandedId === entry.id ? '⌃' : '▶'}</span>
+                <span className="recording-card-copy">
+                  <strong title={entry.name}>{withoutExtension(entry.name)}</strong>
+                  <small><span>{formatBytes(entry.bytes)}</span><span aria-hidden="true">·</span><span>{new Date(entry.modifiedAtUtc).toLocaleString()}</span></small>
+                </span>
+              </button>
+              <div className="recording-card-actions">
+                <button type="button" className="btn-secondary" onClick={() => void rename(entry)}>Renomear</button>
+                <button type="button" className="recording-delete-button" onClick={() => void remove(entry)} aria-label={`Mover ${entry.name} para o Lixo`}>Eliminar</button>
+              </div>
             </div>
+            {expandedId === entry.id && (
+              <div className="recording-card-details" id={`recording-panel-${entry.id}`}>
+                {playing?.id === entry.id && playbackUrl ? (
+                  <div className="recording-inline-player" aria-label={`A reproduzir ${playing.name}`}>
+                    <div className="recording-player-header">
+                      <div><span>A reproduzir agora</span><strong title={playing.name}>{withoutExtension(playing.name)}</strong></div>
+                      <button type="button" className="recording-close-button" onClick={closeRecording}>Fechar leitor</button>
+                    </div>
+                    <video
+                      key={playbackUrl}
+                      src={playbackUrl}
+                      controls
+                      autoPlay
+                      playsInline
+                      className="recording-player-video"
+                      onError={() => {
+                        if (usingCompatibilityPlayer) {
+                          setMessage('O leitor de compatibilidade não conseguiu abrir esta gravação.');
+                          return;
+                        }
+                        void startCompatibilityPlayer();
+                      }}
+                    />
+                    {opening && <div className="recording-player-loading">A preparar vídeo…</div>}
+                    {!usingCompatibilityPlayer && !opening && <button type="button" className="recording-compatibility-link" onClick={() => void startCompatibilityPlayer()}>Este vídeo não abre? Usar leitor de compatibilidade</button>}
+                  </div>
+                ) : (
+                  <div className="recording-card-loading" role="status">
+                    <span className="recording-loader" aria-hidden="true" />
+                    <span>{opening ? 'A preparar vídeo…' : 'A abrir gravação…'}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </article>
         ))}
       </section>

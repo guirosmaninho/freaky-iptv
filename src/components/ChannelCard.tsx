@@ -546,7 +546,7 @@ export const ChannelCard = memo(ChannelCardComponent, (prevProps, nextProps) => 
   return (
     prevProps.isActive === nextProps.isActive &&
     prevProps.isFavorite === nextProps.isFavorite &&
-    prevProps.activeChannelId === nextProps.activeChannelId &&
+    (!nextProps.isActive || prevProps.activeChannelId === nextProps.activeChannelId) &&
     Math.round(prevProps.currentProgress) === Math.round(nextProps.currentProgress) &&
     prevProps.currentProgram === nextProps.currentProgram &&
     channelContentEqual(prevProps.channel, nextProps.channel) &&

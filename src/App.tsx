@@ -860,9 +860,10 @@ export const App: React.FC = () => {
     if (!isCurrentOperation()) return;
 
     // Rebuild channels with favorite flags
+    const favoriteIds = new Set(favorites);
     const updatedChannels = playlist.channels.map(ch => ({
       ...ch,
-      isFavorite: favorites.includes(ch.id)
+      isFavorite: favoriteIds.has(ch.id)
     }));
 
     setRawChannels(updatedChannels);
@@ -994,7 +995,7 @@ export const App: React.FC = () => {
     await refreshStorageInfo();
   };
 
-  const handleToggleReminder = async (channel: Channel, programme: EPGProgram, leadMinutes: Reminder['leadMinutes'] = 10) => {
+  const handleToggleReminder = useCallback(async (channel: Channel, programme: EPGProgram, leadMinutes: Reminder['leadMinutes'] = 10) => {
     const id = `${channel.id}\u0000${programme.startUtc}`;
     const existing = reminders.find(reminder => reminder.id === id);
     const next = existing
@@ -1003,7 +1004,7 @@ export const App: React.FC = () => {
     ensureIpcSuccess(await window.electron.saveReminders(next), 'Failed to save reminder.');
     setReminders(next);
     setStatusText(existing ? 'Reminder removed.' : `Reminder set for ${leadMinutes} minutes before ${programme.title}.`);
-  };
+  }, [reminders]);
 
   const handleClearFavorites = async () => {
     setFavoriteChannelIds(new Set());
@@ -1033,7 +1034,7 @@ export const App: React.FC = () => {
       await finishActiveRecording();
 
       // Close active watch session first
-      await endCurrentSessionRef.current();
+      const previousSessionSave = endCurrentSessionRef.current();
 
       // Open new channel
       setActiveChannel(playbackChannel);
@@ -1072,7 +1073,12 @@ export const App: React.FC = () => {
       setCurrentPlayStartTime(selectedAtUtc);
 
       if (saveState) {
-        await saveSettingsInternal(playlistUrl, epgUrl, volume, Array.from(favoriteChannelIds), updatedRecents, playbackChannel.id, qualityMappings);
+        await Promise.all([
+          previousSessionSave,
+          saveSettingsInternal(playlistUrl, epgUrl, volume, Array.from(favoriteChannelIds), updatedRecents, playbackChannel.id, qualityMappings)
+        ]);
+      } else {
+        await previousSessionSave;
       }
     } catch (err) {
       console.error('Play channel failed:', err);
@@ -1182,19 +1188,21 @@ export const App: React.FC = () => {
     activeSessionRef.current = null;
 
     if (durationMs >= 5000) {
-      const updatedHistory = pruneWatchHistory([...watchHistoryRef.current, completedSession], historyRetentionDays);
+      const appendedHistory = [...watchHistoryRef.current, completedSession];
+      const updatedHistory = pruneWatchHistory(appendedHistory, historyRetentionDays);
       watchHistoryRef.current = updatedHistory;
-      setWatchHistory(updatedHistory);
-      setStats(computeStats(updatedHistory, { qualityMappings }));
+      startTransition(() => setWatchHistory(updatedHistory));
 
       try {
-        ensureIpcSuccess(await window.electron.saveHistory(updatedHistory), 'Failed to save history.');
-        await refreshStorageInfo();
+        const saved = updatedHistory.length === appendedHistory.length
+          ? await window.electron.appendHistory(completedSession)
+          : await window.electron.saveHistory(updatedHistory);
+        ensureIpcSuccess(saved, 'Failed to save history.');
       } catch (err) {
         console.error('Failed to save history:', err);
       }
     }
-  }, [historyRetentionDays, qualityMappings, refreshStorageInfo]);
+  }, [historyRetentionDays]);
 
   useEffect(() => {
     endCurrentSessionRef.current = endCurrentSession;
@@ -1258,7 +1266,7 @@ export const App: React.FC = () => {
     volumeSaveTimerRef.current = window.setTimeout(() => {
       void flushPendingVolumeSave().catch(err => console.error('Failed to save volume:', err));
     }, VOLUME_PERSIST_DEBOUNCE_MS);
-  }, [activeChannel?.id, epgUrl, favoriteChannelIds, flushPendingVolumeSave, playlistUrl, qualityMappings, recentChannelIds, saveSettingsInternal]);
+  }, [flushPendingVolumeSave]);
 
   useEffect(() => () => {
     if (volumeSaveTimerRef.current !== null) {
