@@ -58,16 +58,21 @@ const TvGuideRowComponent: React.FC<TvGuideRowProps> = ({
   onToggleReminder
 }) => {
   const reminderId = (programme: EPGProgram) => `${channel.id}\u0000${programme.startUtc}`;
-  const reminderButton = (programme: EPGProgram) => (
-    <button
-      type="button"
-      className="player-ghost-button tv-guide-reminder-button"
-      onClick={(event) => { event.stopPropagation(); onToggleReminder(channel, programme); }}
-      aria-label={`${reminders.some(reminder => reminder.id === reminderId(programme)) ? 'Remove' : 'Set'} reminder for ${programme.title}`}
-    >
-      {reminders.some(reminder => reminder.id === reminderId(programme)) ? 'Reminder set' : 'Remind me'}
-    </button>
-  );
+  const reminderButton = (programme: EPGProgram) => {
+    const isReminderSet = reminders.some(reminder => reminder.id === reminderId(programme));
+
+    return (
+      <button
+        type="button"
+        className={`player-ghost-button tv-guide-reminder-button${isReminderSet ? ' is-active' : ''}`}
+        onClick={(event) => { event.stopPropagation(); onToggleReminder(channel, programme); }}
+        aria-pressed={isReminderSet}
+        aria-label={`${isReminderSet ? 'Remove' : 'Set'} reminder for ${programme.title}`}
+      >
+        {isReminderSet ? 'Reminder set' : 'Remind me'}
+      </button>
+    );
+  };
   const renderUpcomingCell = (upcomingProgram: EPGProgram | undefined, label: string, className = '') => (
     <div className={`tv-guide-cell tv-guide-upcoming ${className}`}>
       {upcomingProgram ? (

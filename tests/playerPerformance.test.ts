@@ -44,7 +44,7 @@ test('does not fight the decoder with gap seeks during startup or display change
 });
 
 test('keeps full history rewrites and analytics out of the zapping path', () => {
-  const appSource = readProjectFile('src/App.tsx');
+  const appSource = readProjectFile('src/App.tsx').replace(/\r\n/g, '\n');
   const preloadSource = readProjectFile('preload.cjs');
   const mainSource = readProjectFile('main.cjs');
   const endSessionStart = appSource.indexOf('const endCurrentSession = useCallback');
@@ -58,7 +58,7 @@ test('keeps full history rewrites and analytics out of the zapping path', () => 
 });
 
 test('keeps the active channel update urgent while history review data is deferred', () => {
-  const appSource = readProjectFile('src/App.tsx');
+  const appSource = readProjectFile('src/App.tsx').replace(/\r\n/g, '\n');
   const endSessionStart = appSource.indexOf('const endCurrentSession = useCallback');
   const endSessionEnd = appSource.indexOf('useEffect(() => {\n    endCurrentSessionRef.current', endSessionStart);
   const endSessionSource = appSource.slice(endSessionStart, endSessionEnd);
@@ -91,10 +91,11 @@ test('passes one stable reminder callback to memoized TV guide rows', () => {
   assert.doesNotMatch(guideSource, /onToggleReminder=\{\(channel, programme\) =>/);
 });
 
-test('skips the full Live TV filter scan when no filters are active', () => {
+test('skips the full Live TV filter scan when no category, search, or favourites filter is active', () => {
   const gridSource = readProjectFile('src/components/LiveGrid.tsx');
 
-  assert.match(gridSource, /if \(!showFavoritesOnly && effectiveSelectedCategory === 'All channels' && !hasSearch && !nowOnly && startingSoonMinutes === 0\) \{\s*return channels;\s*\}/);
+  assert.match(gridSource, /if \(!showFavoritesOnly && effectiveSelectedCategory === 'All channels' && !hasSearch\) \{\s*return channels;\s*\}/);
+  assert.doesNotMatch(gridSource, /On now|Starting soon|nowOnly|startingSoonMinutes/);
 });
 
 test('indexes favorites before rebuilding refreshed playlist rows', () => {

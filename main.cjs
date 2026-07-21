@@ -96,9 +96,9 @@ let isConnecting = false;
 let discordConnectTimeout = null;
 let discordReadBuffer = Buffer.alloc(0);
 let currentDiscordSettings = {
-  enabled: false,
+  enabled: true,
   showChannel: true,
-  showProgram: false,
+  showProgram: true,
   showArtwork: true,
   clientId: '1514411481259577364'
 };
@@ -234,9 +234,9 @@ function serializeSettingsForDisk(settings) {
     AutoRefreshHours: settings.autoRefreshHours,
     AutoplayLastChannel: settings.autoplayLastChannel,
     HistoryRetentionDays: settings.historyRetentionDays,
-    DiscordRpcEnabled: settings.discordRpcEnabled !== undefined ? settings.discordRpcEnabled : false,
+    DiscordRpcEnabled: settings.discordRpcEnabled !== undefined ? settings.discordRpcEnabled : true,
     DiscordShowChannel: settings.discordShowChannel !== undefined ? settings.discordShowChannel : true,
-    DiscordShowProgram: settings.discordShowProgram !== undefined ? settings.discordShowProgram : false,
+    DiscordShowProgram: settings.discordShowProgram !== undefined ? settings.discordShowProgram : true,
     DiscordShowArtwork: settings.discordShowArtwork !== undefined ? settings.discordShowArtwork : true,
     DiscordArtworkPreferenceVersion: 1,
     DiscordClientId: settings.discordClientId || '1514411481259577364',
@@ -267,9 +267,9 @@ function loadSettingsFromFile() {
       autoRefreshHours: 4,
       autoplayLastChannel: true,
       historyRetentionDays: 365,
-      discordRpcEnabled: false,
+      discordRpcEnabled: true,
       discordShowChannel: true,
-      discordShowProgram: false,
+      discordShowProgram: true,
       discordShowArtwork: true,
       discordClientId: '1514411481259577364',
       appearance: 'system',
@@ -299,12 +299,12 @@ function loadSettingsFromFile() {
       autoRefreshHours: data.AutoRefreshHours !== undefined ? data.AutoRefreshHours : 4,
       autoplayLastChannel: data.AutoplayLastChannel !== undefined ? data.AutoplayLastChannel : true,
       historyRetentionDays: data.HistoryRetentionDays !== undefined ? data.HistoryRetentionDays : 365,
-      discordRpcEnabled: data.DiscordRpcEnabled !== undefined ? data.DiscordRpcEnabled : false,
+      discordRpcEnabled: data.DiscordRpcEnabled !== undefined ? data.DiscordRpcEnabled : true,
       discordShowChannel: data.DiscordShowChannel !== undefined ? data.DiscordShowChannel : true,
       // Legacy builds did not expose the artwork switch. Restore the previous
       // behaviour for those settings, while preserving an explicit choice
       // after the preference version has been written.
-      discordShowProgram: data.DiscordShowProgram !== undefined ? data.DiscordShowProgram : false,
+      discordShowProgram: data.DiscordShowProgram !== undefined ? data.DiscordShowProgram : true,
       discordShowArtwork: hasDiscordArtworkPreference
         ? storedDiscordShowArtwork === true
         : storedDiscordShowArtwork !== false,
@@ -328,9 +328,9 @@ function loadSettingsFromFile() {
       autoRefreshHours: 4,
       autoplayLastChannel: true,
       historyRetentionDays: 365,
-      discordRpcEnabled: false,
+      discordRpcEnabled: true,
       discordShowChannel: true,
-      discordShowProgram: false,
+      discordShowProgram: true,
       discordShowArtwork: true,
       discordClientId: '1514411481259577364',
       appearance: 'system',
@@ -1109,6 +1109,7 @@ registerTrustedHandle('clear-history', async () => {
 });
 
 const reminderTimers = new Map();
+const MAX_REMINDER_TIMEOUT_MS = 0x7fffffff;
 
 function validateReminder(reminder) {
   assertPlainObject(reminder, 'Reminder');
@@ -1154,14 +1155,27 @@ function dispatchReminder(reminder) {
 function scheduleReminders(reminders) {
   for (const timer of reminderTimers.values()) clearTimeout(timer);
   reminderTimers.clear();
+
   for (const reminder of reminders) {
-    const dueAt = new Date(reminder.programmeStartUtc).getTime() - reminder.leadMinutes * 60_000;
-    const delay = dueAt - Date.now();
-    if (delay <= 0 || delay > 0x7fffffff) continue;
-    reminderTimers.set(reminder.id, setTimeout(() => {
-      reminderTimers.delete(reminder.id);
-      dispatchReminder(reminder);
-    }, delay));
+    const programmeStart = new Date(reminder.programmeStartUtc).getTime();
+    const leadMinutes = Number(reminder.leadMinutes);
+    const dueAt = programmeStart - leadMinutes * 60_000;
+    if (!Number.isFinite(programmeStart) || ![0, 5, 10, 15, 30].includes(leadMinutes) || !Number.isFinite(dueAt) || dueAt <= Date.now()) {
+      continue;
+    }
+
+    const armReminderTimer = () => {
+      const remaining = dueAt - Date.now();
+      if (remaining <= 0) {
+        reminderTimers.delete(reminder.id);
+        dispatchReminder(reminder);
+        return;
+      }
+
+      reminderTimers.set(reminder.id, setTimeout(armReminderTimer, Math.min(remaining, MAX_REMINDER_TIMEOUT_MS)));
+    };
+
+    armReminderTimer();
   }
 }
 
@@ -3514,9 +3528,9 @@ async function applyDiscordSettings(enabled, showChannel, showProgram, showArtwo
   const oldClientId = currentDiscordSettings.clientId;
   const oldEnabled = currentDiscordSettings.enabled;
 
-  currentDiscordSettings.enabled = enabled !== undefined ? enabled : false;
+  currentDiscordSettings.enabled = enabled !== undefined ? enabled : true;
   currentDiscordSettings.showChannel = showChannel !== undefined ? showChannel : true;
-  currentDiscordSettings.showProgram = showProgram !== undefined ? showProgram : false;
+  currentDiscordSettings.showProgram = showProgram !== undefined ? showProgram : true;
   currentDiscordSettings.showArtwork = showArtwork !== undefined ? showArtwork : true;
   currentDiscordSettings.clientId = clientId || '1514411481259577364';
 

@@ -94,6 +94,13 @@ describe('Electron security contract', () => {
     assert.equal(sent[0]?.payload.body, 'Programa das 16h');
   });
 
+  it('uses the native notification path when the platform supports it', () => {
+    const source = readProjectFile('main.cjs');
+    assert.match(source, /if \(Notification\.isSupported\(\)\)/);
+    assert.match(source, /new Notification\(\{ title, body \}\)/);
+    assert.match(source, /notification\.show\(\)/);
+  });
+
   it('enables renderer isolation and blocks untrusted navigation', () => {
     const source = readProjectFile('main.cjs');
 
@@ -168,16 +175,18 @@ describe('Electron security contract', () => {
     assert.match(source, /maxOutputLength:\s*MAX_DECOMPRESSED_TEXT_BYTES/);
   });
 
-  it('redacts stream URLs before logging and keeps Discord opt-in', () => {
+  it('redacts stream URLs before logging and enables the complete Discord presence by default', () => {
     const mainSource = readProjectFile('main.cjs');
     const appSource = readProjectFile('src/App.tsx');
     const playerSource = readProjectFile('src/components/VideoPlayer.tsx');
 
     assert.match(mainSource, /function redactUrlForLogs\(/);
     assert.doesNotMatch(mainSource, /Starting low CPU relay for:\s*\$\{url\}/);
-    assert.doesNotMatch(mainSource, /enabled:\s*true,\s*showChannel/);
+    assert.match(mainSource, /enabled:\s*true,\s*showChannel/);
     assert.doesNotMatch(playerSource, /proxy for URL/);
-    assert.match(appSource, /useState\(false\).*discordRpcEnabled|discordRpcEnabled.*useState\(false\)/s);
+    assert.match(mainSource, /discordRpcEnabled: true/);
+    assert.match(mainSource, /discordShowProgram: true/);
+    assert.match(appSource, /discordShowProgram, setDiscordShowProgram\] = useState\(true\)/);
     assert.match(mainSource, /DiscordArtworkPreferenceVersion/);
     assert.match(mainSource, /discordShowArtwork:\s*true/);
     assert.match(appSource, /discordShowArtwork, setDiscordShowArtwork\] = useState\(true\)/);

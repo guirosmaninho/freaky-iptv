@@ -273,7 +273,7 @@ export const App: React.FC = () => {
   // Discord settings
   const [discordRpcEnabled, setDiscordRpcEnabled] = useState(true);
   const [discordShowChannel, setDiscordShowChannel] = useState(true);
-  const [discordShowProgram, setDiscordShowProgram] = useState(false);
+  const [discordShowProgram, setDiscordShowProgram] = useState(true);
   const [discordShowArtwork, setDiscordShowArtwork] = useState(true);
   const [discordClientId, setDiscordClientId] = useState('1514411481259577364');
   
@@ -451,7 +451,9 @@ export const App: React.FC = () => {
     currentPlayStartTime,
     qualityMappings,
     discordRpcEnabled,
-    discordShowChannel
+    discordShowChannel,
+    discordShowProgram,
+    discordShowArtwork
   ]);
 
   useEffect(() => {
@@ -521,7 +523,7 @@ export const App: React.FC = () => {
         setDismissedReviewIds(loadedDismissedReviewIds);
         setDiscordRpcEnabled(settings.discordRpcEnabled !== undefined ? settings.discordRpcEnabled : true);
         setDiscordShowChannel(settings.discordShowChannel !== undefined ? settings.discordShowChannel : true);
-        setDiscordShowProgram(settings.discordShowProgram === true);
+        setDiscordShowProgram(settings.discordShowProgram !== false);
         setDiscordShowArtwork(settings.discordShowArtwork !== false);
         setDiscordClientId(settings.discordClientId || '1514411481259577364');
 
@@ -1394,7 +1396,6 @@ export const App: React.FC = () => {
             onToggleFavorite={handleToggleFavorite}
             getChannelEpgInfo={getChannelEpgInfo}
             qualityMappings={qualityMappings}
-            nowMs={epgTickMs}
           />
         );
       case 'Favorites':
@@ -1409,7 +1410,6 @@ export const App: React.FC = () => {
             getChannelEpgInfo={getChannelEpgInfo}
             showFavoritesOnly={true}
             qualityMappings={qualityMappings}
-            nowMs={epgTickMs}
           />
         );
       case 'Guide':

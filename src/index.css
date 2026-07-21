@@ -3728,10 +3728,35 @@ body::before,
 }
 
 .live-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
   padding: 10px;
   border: 1px solid var(--ui-border);
   border-radius: 13px;
   background: var(--ui-surface-1);
+}
+
+.live-toolbar__category,
+.live-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.live-toolbar__actions {
+  flex: 1 1 520px;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.live-toolbar__favorites-note {
+  color: var(--ui-text-secondary);
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .field-label {
@@ -3743,6 +3768,27 @@ body::before,
 .search-field {
   position: relative;
   width: min(280px, 30vw);
+}
+
+.live-search-field {
+  flex: 1 1 360px;
+  width: min(460px, 42vw);
+  min-width: 220px;
+}
+
+.live-search-field input {
+  width: 100%;
+  border-radius: var(--radius-control);
+  padding: 10px 14px 10px 38px;
+}
+
+.live-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--ui-text-tertiary);
+  pointer-events: none;
 }
 
 .segmented-control {
@@ -3939,19 +3985,40 @@ body::before,
 
 @media (max-width: 1080px) {
   .live-toolbar,
-  .live-toolbar > div,
-  .live-toolbar > div:last-child {
+  .live-toolbar__category,
+  .live-toolbar__actions {
     align-items: stretch !important;
   }
 
-  .live-toolbar > div:last-child {
+  .live-toolbar__actions {
     width: 100%;
     gap: 10px !important;
   }
 
-  .search-field {
-    flex: 1;
+  .live-search-field {
+    flex: 1 1 auto;
     width: auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .live-toolbar__category,
+  .live-toolbar__actions {
+    width: 100%;
+  }
+
+  .live-toolbar__category select {
+    flex: 1;
+    min-width: 0 !important;
+  }
+
+  .live-toolbar__actions {
+    flex-wrap: wrap;
+  }
+
+  .live-search-field {
+    flex-basis: 100%;
+    min-width: 0;
   }
 }
 
@@ -4682,11 +4749,19 @@ body::before,
 @supports (backdrop-filter: url("#liquid-glass-refraction")) {
   .liquid-sidebar {
     backdrop-filter: url("#liquid-glass-refraction") blur(16px) saturate(155%);
-    -webkit-backdrop-filter: url("#liquid-glass-refraction") blur(16px) saturate(155%);
   }
   .hud-glass-layer,
   .player-shell--compact {
     backdrop-filter: url("#liquid-glass-refraction") blur(2px) saturate(180%);
+  }
+}
+
+@supports (-webkit-backdrop-filter: url("#liquid-glass-refraction")) {
+  .liquid-sidebar {
+    -webkit-backdrop-filter: url("#liquid-glass-refraction") blur(16px) saturate(155%);
+  }
+  .hud-glass-layer,
+  .player-shell--compact {
     -webkit-backdrop-filter: url("#liquid-glass-refraction") blur(2px) saturate(180%);
   }
 }
@@ -4888,4 +4963,17 @@ body::before,
 @media (max-width: 480px) { .recording-card { --recording-preview-width: 84px; } }
 @media (prefers-reduced-motion: reduce) { .recording-preview-shade { transition: none; } }
 .diagnostics-json { max-height: 520px; overflow: auto; padding: 16px; border-radius: var(--radius-control); background: var(--bg-deep); color: var(--text-secondary); white-space: pre-wrap; }
-.tv-guide-reminder-button { margin-top: 8px; font-size: 11px; }
+.tv-guide-reminder-button {
+  align-self: flex-start;
+  width: auto;
+  min-width: 0;
+  height: 30px;
+  min-height: 30px;
+  margin-top: 8px;
+  padding: 0 11px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+}
