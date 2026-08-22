@@ -4,13 +4,24 @@ import { classifyPlaybackFailure, playbackFailureMessage, redactPlaybackDiagnost
 import { normalizeProxyStartResult } from '../services/proxyStartResult';
 import { compactPlaybackStateText } from '../services/compactPlaybackState';
 import {
+  adaptiveEscalationThreshold,
+  applyHlsRuntimeProfile,
+  applyMpegTsRuntimeProfile,
+  buildHlsBufferConfig,
+  buildMpegTsBufferConfig,
   chooseInitialPlaybackEngine,
   evaluatePlaybackStartup,
   forgetRememberedPlaybackEngine,
+  getRememberedAdaptiveBufferLevel,
   getRememberedPlaybackEngine,
+  MPEGTS_BUFFER_PROFILES,
   nextAdaptiveBufferState,
   nextPlaybackStartupCheckDelay,
-  rememberSuccessfulPlaybackEngine
+  POST_STALL_BOOST_MS,
+  POST_STALL_TARGET_BOOST_SECONDS,
+  rememberAdaptiveBufferLevel,
+  rememberSuccessfulPlaybackEngine,
+  HLS_QUALITY_CONFIG
 } from '../services/playbackStartupPolicy';
 import type { PlaybackEngine, PlaybackStartupProfile, PlaybackStreamKind } from '../services/playbackStartupPolicy';
 import { getChannelQualityLabel } from '../services/utils';
@@ -37,33 +48,7 @@ interface VideoPlayerProps {
 const TRANSIENT_BUFFERING_INDICATOR_DELAY_MS = 800;
 const IMMERSIVE_CONTROLS_AUTO_HIDE_MS = 2600;
 const NETWORK_HISTORY_SAMPLE_COUNT = 36;
-const ADAPTIVE_STALL_WINDOW_MS = 45_000;
-const ADAPTIVE_STALL_THRESHOLD = 3;
 const ADAPTIVE_BUFFER_DECAY_MS = 10 * 60 * 1000;
-
-const MPEGTS_BUFFER_PROFILES: Record<AdaptiveBufferLevel, {
-  stashInitialSize: number;
-  liveBufferLatencyMaxLatency: number;
-  liveBufferLatencyMinRemain: number;
-}> = {
-  // stashInitialSize: internal read-ahead buffer for mpegts.js.
-  // FHD streams run at 6–8 Mbps, so 384 KB ≈ 0.4 s — too small to decode
-  // H.264 High Profile without artefacts. 1 MB ≈ 1.3 s gives a stable margin.
-  0: { stashInitialSize: 1024 * 1024,      liveBufferLatencyMaxLatency: 7.0,  liveBufferLatencyMinRemain: 3.5 },
-  1: { stashInitialSize: 2 * 1024 * 1024,  liveBufferLatencyMaxLatency: 10.0, liveBufferLatencyMinRemain: 5.0 },
-  2: { stashInitialSize: 4 * 1024 * 1024,  liveBufferLatencyMaxLatency: 14.0, liveBufferLatencyMinRemain: 7.0 }
-};
-
-const HLS_BUFFER_PROFILES: Record<AdaptiveBufferLevel, {
-  liveSyncDuration: number;
-  liveMaxLatencyDuration: number;
-  maxBufferLength: number;
-  maxMaxBufferLength: number;
-}> = {
-  0: { liveSyncDuration: 8, liveMaxLatencyDuration: 30, maxBufferLength: 30, maxMaxBufferLength: 45 },
-  1: { liveSyncDuration: 12, liveMaxLatencyDuration: 40, maxBufferLength: 45, maxMaxBufferLength: 60 },
-  2: { liveSyncDuration: 16, liveMaxLatencyDuration: 55, maxBufferLength: 60, maxMaxBufferLength: 75 }
-};
 
 const formatBitrate = (kbps: number) => {
   if (kbps <= 0) return '0 Kbps';
@@ -214,10 +199,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     onPlaybackEventRef.current = onPlaybackEvent;
   }, [onPlaybackEvent]);
 
+  const applyLiveBufferProfiles = useCallback((targetBoostSeconds = 0) => {
+    applyHlsRuntimeProfile(hlsRef.current, adaptiveBufferLevelRef.current, targetBoostSeconds);
+    applyMpegTsRuntimeProfile(mpegtsRef.current, adaptiveBufferLevelRef.current, targetBoostSeconds);
+  }, []);
+
   useEffect(() => {
-    // Buffer pressure belongs to one source only; a problematic channel must
-    // not make the next channel start with a permanently inflated buffer.
-    adaptiveBufferLevelRef.current = 0;
+    // Buffer pressure belongs to one source only: a channel that needed a
+    // deeper buffer starts there again on the next tuning, while its problems
+    // never leak into the following channel.
+    const sourceUrl = channel.streamUrl;
+    adaptiveBufferLevelRef.current = getRememberedAdaptiveBufferLevel(sourceUrl, window.localStorage);
     stallEventsRef.current = [];
     lastAdaptiveStallAtRef.current = null;
 
@@ -227,22 +219,35 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (adaptiveBufferLevelRef.current > 0) {
         adaptiveBufferLevelRef.current = (adaptiveBufferLevelRef.current - 1) as AdaptiveBufferLevel;
         lastAdaptiveStallAtRef.current = Date.now();
+        applyLiveBufferProfiles(0);
       }
     }, 60_000);
 
-    return () => window.clearInterval(decayTimer);
-  }, [channel.streamUrl]);
+    return () => {
+      window.clearInterval(decayTimer);
+      rememberAdaptiveBufferLevel(sourceUrl, adaptiveBufferLevelRef.current, window.localStorage);
+    };
+  }, [applyLiveBufferProfiles, channel.streamUrl]);
 
   useEffect(() => {
-    void window.electron.getRecordingState().then(setRecordingState);
-    return window.electron.onRecordingStateChange(setRecordingState);
+    let cancelled = false;
+    void window.electron.getRecordingState()
+      .then(state => { if (!cancelled) setRecordingState(state); })
+      .catch(() => {});
+    const unsubscribe = window.electron.onRecordingStateChange(setRecordingState);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
     if (recordingState.status !== 'recording' && recordingState.status !== 'finalizing') return;
     const timer = window.setInterval(() => {
       setRecordingClock(Date.now());
-      void window.electron.getRecordingState().then(setRecordingState);
+      void window.electron.getRecordingState()
+        .then(setRecordingState)
+        .catch(() => {});
     }, 1000);
     return () => window.clearInterval(timer);
   }, [recordingState.status]);
@@ -489,6 +494,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let bufferingIndicatorTimer: number | null = null;
     let suppressVideoError = false;
     let copyProxyAttempted = false;
+    let vlcProxyStartedThisRun = false;
     let hardwareProxyAttempted = false;
     let currentProxyMode: VlcProxyMode | null = null;
     let currentEngine: PlaybackAttempt['engine'] | null = null;
@@ -498,6 +504,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let lastStartupDataAt: number | null = null;
     let startupFallback: (() => void | Promise<void>) | null = null;
     let attempts: PlaybackAttempt[] = [];
+    let recoveringFromStall = false;
+    let activeTargetBoostSeconds = 0;
+    let stallRecoveryBoostTimer: number | null = null;
+    let performedLiveEdgeJoin = false;
 
     const publishAttempts = () => setPlaybackAttempts(attempts.map(attempt => ({ ...attempt })));
     const isCurrentAttempt = (attemptId: number) => !isCancelled && activeAttemptId === attemptId;
@@ -725,9 +735,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       return { relayId: activeRelayId, url: activeRelayUrl };
     };
 
-    const hlsBufferProfile = () => HLS_BUFFER_PROFILES[adaptiveBufferLevelRef.current];
-    const mpegTsBufferProfile = () => MPEGTS_BUFFER_PROFILES[adaptiveBufferLevelRef.current];
-
     const startMpegTsPlayback = async (
       url: string,
       allowVlcFallback: boolean,
@@ -756,17 +763,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         return;
       }
 
-      const mpegTsProfile = mpegTsBufferProfile();
       const player = mpegts.createPlayer({
         type: 'mpegts',
         url,
         isLive: true
       }, {
-        enableStashBuffer: true,
-        stashInitialSize: mpegTsProfile.stashInitialSize,
-        liveBufferLatencyChasing: true,
-        liveBufferLatencyMaxLatency: mpegTsProfile.liveBufferLatencyMaxLatency,
-        liveBufferLatencyMinRemain: mpegTsProfile.liveBufferLatencyMinRemain,
+        ...buildMpegTsBufferConfig(adaptiveBufferLevelRef.current),
         enableWorker: true,
         lazyLoad: false,
         autoCleanupSourceBuffer: true,
@@ -906,6 +908,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       const proxyResult = normalizeProxyStartResult(await window.electron.startVlcProxy(sourceUrl, { mode, relayId: activeRelayId }));
       if (!isCurrentAttempt(attemptId)) return;
+      if (proxyResult.ok && proxyResult.url) vlcProxyStartedThisRun = true;
 
       if (!proxyResult.ok || !proxyResult.url) {
         if (allowDirectFallback) {
@@ -972,14 +975,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (!isCurrentAttempt(attemptId)) return;
 
       if (Hls.isSupported()) {
-        const hlsProfile = hlsBufferProfile();
         const hls = new Hls({
-          liveSyncDuration: hlsProfile.liveSyncDuration,
-          liveMaxLatencyDuration: hlsProfile.liveMaxLatencyDuration,
-          maxLiveSyncPlaybackRate: 1,
+          ...buildHlsBufferConfig(adaptiveBufferLevelRef.current),
+          ...HLS_QUALITY_CONFIG,
           startLevel: -1,
-          maxBufferLength: hlsProfile.maxBufferLength,
-          maxMaxBufferLength: hlsProfile.maxMaxBufferLength,
           maxBufferSize: 60 * 1000 * 1000,
           backBufferLength: 15,
           maxBufferHole: 0.5,
@@ -1117,31 +1116,46 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
     };
 
+    const clearStallRecoveryBoost = () => {
+      if (stallRecoveryBoostTimer !== null) {
+        window.clearTimeout(stallRecoveryBoostTimer);
+        stallRecoveryBoostTimer = null;
+      }
+      activeTargetBoostSeconds = 0;
+    };
+
     const increaseAdaptiveBufferIfNeeded = () => {
       const now = Date.now();
       lastAdaptiveStallAtRef.current = now;
+      const { windowMs, threshold } = adaptiveEscalationThreshold(adaptiveBufferLevelRef.current);
       const nextBufferState = nextAdaptiveBufferState({
         now,
         currentLevel: adaptiveBufferLevelRef.current,
         stallEvents: stallEventsRef.current,
         hasStartedPlayback,
-        windowMs: ADAPTIVE_STALL_WINDOW_MS,
-        threshold: ADAPTIVE_STALL_THRESHOLD
+        windowMs,
+        threshold
       });
 
       adaptiveBufferLevelRef.current = nextBufferState.level;
       stallEventsRef.current = nextBufferState.stallEvents;
       if (!nextBufferState.increased) return;
       setBufferingText('Increasing live buffer');
+      rememberAdaptiveBufferLevel(sourceUrl, adaptiveBufferLevelRef.current, window.localStorage);
+      applyLiveBufferProfiles(activeTargetBoostSeconds);
+    };
 
-      if (hlsRef.current) {
-        const profile = hlsBufferProfile();
-        hlsRef.current.config.liveSyncDuration = profile.liveSyncDuration;
-        hlsRef.current.config.liveMaxLatencyDuration = profile.liveMaxLatencyDuration;
-        hlsRef.current.config.maxBufferLength = profile.maxBufferLength;
-        hlsRef.current.config.maxMaxBufferLength = profile.maxMaxBufferLength;
-        return;
-      }
+    const joinLiveEdgeOnce = () => {
+      if (performedLiveEdgeJoin || !mpegtsRef.current || video.buffered.length === 0) return;
+      performedLiveEdgeJoin = true;
+      const targetLatency = MPEGTS_BUFFER_PROFILES[adaptiveBufferLevelRef.current].liveSyncTargetLatency;
+      const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+      const latency = bufferedEnd - video.currentTime;
+      if (latency <= targetLatency + 3) return;
+      // A relay replay (engine fallback or retry on the same channel) hands
+      // mpegts.js seconds of back-buffer; jump once to the live target
+      // instead of playing through it.
+      video.currentTime = bufferedEnd - (targetLatency + 1);
     };
 
     // Video events listeners
@@ -1156,6 +1170,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setIsPlaying(true);
       setIsBuffering(false);
       setBufferingText('Playing');
+      if (recoveringFromStall) {
+        // Right after a stall the stream is at its most fragile: accept a
+        // little extra latency for a short window, then let rate catch-up
+        // hand it back smoothly instead of hard-seeking.
+        recoveringFromStall = false;
+        clearStallRecoveryBoost();
+        activeTargetBoostSeconds = POST_STALL_TARGET_BOOST_SECONDS;
+        applyLiveBufferProfiles(activeTargetBoostSeconds);
+        stallRecoveryBoostTimer = window.setTimeout(() => {
+          stallRecoveryBoostTimer = null;
+          activeTargetBoostSeconds = 0;
+          applyLiveBufferProfiles(0);
+        }, POST_STALL_BOOST_MS);
+      }
+      joinLiveEdgeOnce();
       if (alreadyStarted) return;
 
       const activeAttempt = attempts.at(-1);
@@ -1175,6 +1204,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         jumpBufferGaps();
         return;
       }
+      recoveringFromStall = true;
       playbackReporter.bufferingStart();
       showBufferingIndicator();
       increaseAdaptiveBufferIfNeeded();
@@ -1186,6 +1216,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         jumpBufferGaps();
         return;
       }
+      recoveringFromStall = true;
       playbackReporter.stalled();
       showBufferingIndicator();
       increaseAdaptiveBufferIfNeeded();
@@ -1269,7 +1300,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       clearStartupTimer();
       clearProxyTrafficPolling();
       clearBufferingIndicatorTimer();
-      window.electron.stopVlcProxy().catch(() => {});
+      clearStallRecoveryBoost();
+      // Only stop a proxy this effect run actually started; an unconditional
+      // stop would kill proxy state for unrelated cleanups (e.g. quality
+      // mapping changes).
+      if (vlcProxyStartedThisRun) window.electron.stopVlcProxy().catch(() => {});
       const relayIdToStop = activeRelayId;
       if (relayIdToStop) {
         window.electron.stopPlaybackRelay(relayIdToStop).catch(() => {});
@@ -1284,10 +1319,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       clearInterval(gapSkipperInterval);
       cleanupPlayers();
     };
-  }, [channel.name, channel.streamUrl, cleanupPlayers, qualityMappings, retryNonce, sessionId]);
+  }, [applyLiveBufferProfiles, channel.name, channel.streamUrl, cleanupPlayers, qualityMappings, retryNonce, sessionId]);
 
   // Periodic statistics updater timer
   useEffect(() => {
+    let cancelled = false;
     let lastFrameCount = videoRef.current?.getVideoPlaybackQuality?.().totalVideoFrames ?? 0;
     let lastTime = Date.now();
     let lastBytes = bytesRef.current;
@@ -1335,6 +1371,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       const bytesDiff = bytesRef.current - lastBytes;
       lastBytes = bytesRef.current;
+      if (cancelled) return;
       if (!showStats && !isBuffering) return;
 
       // Extract resolution
@@ -1435,7 +1472,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       void tick();
     }, showStats || isBuffering ? 1000 : 5000);
 
-    return () => clearInterval(timer);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [channel.streamUrl, isPlaying, isBuffering, sessionId, showStats]);
 
   const handleMuteToggle = () => {

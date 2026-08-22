@@ -49,8 +49,9 @@ test('uses VideoToolbox and a safe fallback chain on macOS', () => {
   assert.equal(getNextFfmpegProxyMode('win32', 'copy'), 'hardware-d3d11');
 });
 
-test('uses a small probe only for the macOS copy relay', () => {
+test('uses a small probe for copy relays on every platform', () => {
   assert.deepEqual(getFfmpegProbeArgs('darwin', 'copy'), ['-analyzeduration', '250000', '-probesize', '524288']);
   assert.deepEqual(getFfmpegProbeArgs('darwin', 'hardware-videotoolbox'), ['-analyzeduration', '1000000', '-probesize', '2097152']);
-  assert.deepEqual(getFfmpegProbeArgs('win32', 'copy'), ['-analyzeduration', '1000000', '-probesize', '2097152']);
+  assert.deepEqual(getFfmpegProbeArgs('win32', 'copy'), ['-analyzeduration', '250000', '-probesize', '524288']);
+  assert.deepEqual(getFfmpegProbeArgs('win32', 'hardware-d3d11'), ['-analyzeduration', '1000000', '-probesize', '2097152']);
 });

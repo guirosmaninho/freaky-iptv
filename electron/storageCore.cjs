@@ -18,12 +18,24 @@ function writeJsonAtomic(filePath, value) {
   fs.renameSync(temporary, filePath);
 }
 
+// SQLite runs in WAL mode, so recent commits can live in `-wal`/`-shm`
+// sidecar files. Snapshots (and restores) must include/remove them, otherwise
+// a restore can resurrect stale data or corrupt the database.
+const FILE_SIDECAR_SUFFIXES = ['-wal', '-shm'];
+
 function createFileSnapshot(files, snapshotDir) {
   fs.mkdirSync(snapshotDir, { recursive: true });
   const entries = files.map((filePath, index) => {
     const exists = fs.existsSync(filePath);
     const snapshotName = `${index}-${path.basename(filePath)}`;
-    if (exists) fs.copyFileSync(filePath, path.join(snapshotDir, snapshotName));
+    if (exists) {
+      fs.copyFileSync(filePath, path.join(snapshotDir, snapshotName));
+      for (const suffix of FILE_SIDECAR_SUFFIXES) {
+        if (fs.existsSync(`${filePath}${suffix}`)) {
+          fs.copyFileSync(`${filePath}${suffix}`, path.join(snapshotDir, `${snapshotName}${suffix}`));
+        }
+      }
+    }
     return { filePath, exists, snapshotName };
   });
   writeJsonAtomic(path.join(snapshotDir, 'manifest.json'), { entries });
@@ -35,6 +47,10 @@ function restoreFileSnapshot(snapshotDir) {
   if (!manifest || !Array.isArray(manifest.entries)) throw new Error('Invalid safety snapshot.');
   for (const entry of manifest.entries) {
     if (!entry || typeof entry.filePath !== 'string' || typeof entry.snapshotName !== 'string') throw new Error('Invalid safety snapshot.');
+    // Stale WAL data must never outlive the restore.
+    for (const suffix of FILE_SIDECAR_SUFFIXES) {
+      fs.rmSync(`${entry.filePath}${suffix}`, { force: true });
+    }
     if (!entry.exists) {
       fs.rmSync(entry.filePath, { force: true });
       continue;
@@ -44,6 +60,12 @@ function restoreFileSnapshot(snapshotDir) {
     const temporary = `${entry.filePath}.${process.pid}.restore.tmp`;
     fs.copyFileSync(source, temporary);
     fs.renameSync(temporary, entry.filePath);
+    for (const suffix of FILE_SIDECAR_SUFFIXES) {
+      const sidecarSource = path.join(snapshotDir, `${path.basename(entry.snapshotName)}${suffix}`);
+      if (fs.existsSync(sidecarSource)) {
+        fs.copyFileSync(sidecarSource, `${entry.filePath}${suffix}`);
+      }
+    }
   }
 }
 

@@ -28,7 +28,9 @@ function createDataStore({ dataDir, legacyHistoryFile, legacyCacheFile }) {
       rejectPending(error);
     });
     worker.on('exit', code => {
-      if (code !== 0) rejectPending(new Error(`Data worker exited with code ${code}.`));
+      // Reject pending requests on a clean exit too: otherwise callers hang
+      // forever if the worker exits with code 0 while requests are in flight.
+      rejectPending(new Error(`Data worker exited with code ${code}.`));
       worker = null;
     });
     return worker;

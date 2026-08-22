@@ -1,19 +1,32 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  adaptiveEscalationThreshold,
+  applyHlsRuntimeProfile,
+  applyMpegTsRuntimeProfile,
+  buildHlsBufferConfig,
+  buildMpegTsBufferConfig,
   chooseInitialPlaybackEngine,
+  clearRememberedAdaptiveBufferLevels,
   clearRememberedPlaybackEngines,
   DATA_WITHOUT_FRAME_TIMEOUT_MS,
   evaluatePlaybackStartup,
   FAST_DATA_WITHOUT_FRAME_TIMEOUT_MS,
   FAST_NO_DATA_TIMEOUT_MS,
+  forgetRememberedAdaptiveBufferLevel,
   forgetRememberedPlaybackEngine,
+  getRememberedAdaptiveBufferLevel,
   getRememberedPlaybackEngine,
+  HLS_LIVE_CATCH_UP_PLAYBACK_RATE,
+  HLS_QUALITY_CONFIG,
   nextAdaptiveBufferState,
   nextPlaybackStartupCheckDelay,
   NO_DATA_TIMEOUT_MS,
+  POST_STALL_BOOST_MS,
+  POST_STALL_TARGET_BOOST_SECONDS,
   PROXY_DATA_WITHOUT_FRAME_TIMEOUT_MS,
   PROXY_NO_DATA_TIMEOUT_MS,
+  rememberAdaptiveBufferLevel,
   rememberSuccessfulPlaybackEngine
 } from '../src/services/playbackStartupPolicy';
 import type { PlaybackEngine } from '../src/services/playbackStartupPolicy';
@@ -286,4 +299,142 @@ test('keeps at most 128 persisted playback engine entries', () => {
     (getRememberedPlaybackEngine as (url: string, storage: MemoryStorage) => PlaybackEngine | null)('https://example.test/129.ts', storage),
     'proxy-hardware'
   );
+});
+
+test('escalates level 0 after two stalls in thirty seconds', () => {
+  assert.deepEqual(adaptiveEscalationThreshold(0), { windowMs: 30_000, threshold: 2 });
+  assert.deepEqual(adaptiveEscalationThreshold(1), { windowMs: 45_000, threshold: 3 });
+  assert.deepEqual(adaptiveEscalationThreshold(2), { windowMs: 45_000, threshold: 3 });
+
+  let state = nextAdaptiveBufferState({
+    now: 10_000,
+    currentLevel: 0,
+    stallEvents: [],
+    hasStartedPlayback: true,
+    windowMs: 30_000,
+    threshold: 2
+  });
+  state = nextAdaptiveBufferState({
+    now: 20_000,
+    currentLevel: state.level,
+    stallEvents: state.stallEvents,
+    hasStartedPlayback: true,
+    windowMs: 30_000,
+    threshold: 2
+  });
+  assert.deepEqual(state, { level: 1, stallEvents: [], increased: true });
+});
+
+test('builds mpegts buffer configs with rate catch-up and a chase backstop', () => {
+  assert.deepEqual(buildMpegTsBufferConfig(0), {
+    enableStashBuffer: true,
+    stashInitialSize: 1024 * 1024,
+    liveSync: true,
+    liveSyncTargetLatency: 5,
+    liveSyncMaxLatency: 6.5,
+    liveSyncPlaybackRate: 1.1,
+    liveBufferLatencyChasing: true,
+    liveBufferLatencyMaxLatency: 16,
+    liveBufferLatencyMinRemain: 5
+  });
+  const level2 = buildMpegTsBufferConfig(2);
+  assert.equal(level2.stashInitialSize, 4 * 1024 * 1024);
+  assert.equal(level2.liveSyncTargetLatency, 12);
+  assert.equal(level2.liveSyncMaxLatency, 14.5);
+  assert.equal(level2.liveBufferLatencyMaxLatency, 30);
+  assert.equal(level2.liveBufferLatencyMinRemain, 10);
+});
+
+test('builds hls buffer configs with playback-rate catch-up enabled', () => {
+  assert.deepEqual(buildHlsBufferConfig(0), {
+    liveSyncDuration: 6,
+    liveMaxLatencyDuration: 30,
+    maxLiveSyncPlaybackRate: HLS_LIVE_CATCH_UP_PLAYBACK_RATE,
+    lowLatencyMode: true,
+    maxBufferLength: 30,
+    maxMaxBufferLength: 45
+  });
+  assert.notEqual(HLS_LIVE_CATCH_UP_PLAYBACK_RATE, 1);
+  const level2 = buildHlsBufferConfig(2);
+  assert.equal(level2.liveSyncDuration, 14);
+  assert.equal(level2.liveMaxLatencyDuration, 55);
+  assert.equal(level2.maxBufferLength, 60);
+  assert.equal(level2.maxMaxBufferLength, 75);
+  assert.equal(HLS_QUALITY_CONFIG.testBandwidth, false);
+  assert.equal(HLS_QUALITY_CONFIG.abrEwmaDefaultEstimate, 8_000_000);
+  assert.equal(HLS_QUALITY_CONFIG.abrBandWidthUpFactor, 0.85);
+});
+
+test('applies hls runtime profiles including the post-stall boost', () => {
+  const hls = { config: { liveSyncDuration: 99, liveMaxLatencyDuration: 99, maxBufferLength: 99, maxMaxBufferLength: 99, maxLiveSyncPlaybackRate: 1 } };
+  applyHlsRuntimeProfile(null, 1, POST_STALL_TARGET_BOOST_SECONDS);
+  applyHlsRuntimeProfile(hls, 1, POST_STALL_TARGET_BOOST_SECONDS);
+  assert.equal(hls.config.liveSyncDuration, 10 + POST_STALL_TARGET_BOOST_SECONDS);
+  assert.equal(hls.config.liveMaxLatencyDuration, 40);
+  assert.equal(hls.config.maxBufferLength, 45);
+  assert.equal(hls.config.maxMaxBufferLength, 60);
+  assert.equal(hls.config.maxLiveSyncPlaybackRate, HLS_LIVE_CATCH_UP_PLAYBACK_RATE);
+
+  applyHlsRuntimeProfile(hls, 2);
+  assert.equal(hls.config.liveSyncDuration, 14);
+  assert.ok(POST_STALL_BOOST_MS >= 45_000);
+});
+
+test('applies mpegts runtime profiles defensively', () => {
+  const config = {
+    liveSyncTargetLatency: 5,
+    liveSyncMaxLatency: 6.5,
+    liveBufferLatencyMaxLatency: 16,
+    liveBufferLatencyMinRemain: 5
+  };
+  const player = { _player_engine: { _config: config } };
+  assert.equal(applyMpegTsRuntimeProfile(player, 1, POST_STALL_TARGET_BOOST_SECONDS), true);
+  assert.equal(config.liveSyncTargetLatency, 8 + POST_STALL_TARGET_BOOST_SECONDS);
+  assert.equal(config.liveSyncMaxLatency, 10 + POST_STALL_TARGET_BOOST_SECONDS);
+  assert.equal(config.liveBufferLatencyMaxLatency, 22);
+  assert.equal(config.liveBufferLatencyMinRemain, 7);
+
+  assert.equal(applyMpegTsRuntimeProfile({ _player_engine: {} }, 1), false);
+  assert.equal(applyMpegTsRuntimeProfile({}, 1), false);
+  assert.equal(applyMpegTsRuntimeProfile(null, 1), false);
+  const withoutNumbers = { _player_engine: { _config: { liveSyncTargetLatency: 'nope' } } };
+  assert.equal(applyMpegTsRuntimeProfile(withoutNumbers, 1), false);
+});
+
+test('remembers adaptive buffer levels per hashed source URL without storing level 0', () => {
+  clearRememberedAdaptiveBufferLevels();
+  const storage = new MemoryStorage();
+  const sourceUrl = 'http://user:pass@example.test/live/secret.ts?token=abc123';
+
+  assert.equal(getRememberedAdaptiveBufferLevel(sourceUrl, storage), 0);
+
+  rememberAdaptiveBufferLevel(sourceUrl, 2, storage);
+  assert.equal(getRememberedAdaptiveBufferLevel(sourceUrl, storage), 2);
+  assert.doesNotMatch(storage.serialized(), /user:pass|secret\.ts|token=abc123|example\.test/);
+
+  // Level 0 is the default: remembering it clears the entry instead of storing it.
+  rememberAdaptiveBufferLevel(sourceUrl, 0, storage);
+  assert.equal(getRememberedAdaptiveBufferLevel(sourceUrl, storage), 0);
+  assert.equal(storage.values().length, 0);
+
+  rememberAdaptiveBufferLevel(sourceUrl, 1, storage);
+  assert.equal(forgetRememberedAdaptiveBufferLevel(sourceUrl, storage), true);
+  assert.equal(getRememberedAdaptiveBufferLevel(sourceUrl, storage), 0);
+  assert.equal(storage.values().length, 0);
+});
+
+test('keeps at most 128 persisted adaptive buffer level entries', () => {
+  clearRememberedAdaptiveBufferLevels();
+  const storage = new MemoryStorage();
+  for (let index = 0; index < 130; index += 1) {
+    rememberAdaptiveBufferLevel(`https://example.test/${index}.ts`, (index % 2) + 1 as 1 | 2, storage);
+  }
+  clearRememberedAdaptiveBufferLevels();
+
+  const values = storage.values();
+  assert.equal(values.length, 1);
+  const entries = JSON.parse(values[0]) as unknown[];
+  assert.equal(entries.length, 128);
+  assert.equal(getRememberedAdaptiveBufferLevel('https://example.test/0.ts', storage), 0);
+  assert.equal(getRememberedAdaptiveBufferLevel('https://example.test/129.ts', storage), 2);
 });

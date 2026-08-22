@@ -2,6 +2,18 @@ import type { EpgGuide, EPGProgram, ParserIssue, Channel } from '../types';
 import { downloadText } from './downloadText';
 import { normalizeKey } from './utils';
 
+// Only http(s) icon URLs are kept: an untrusted XMLTV document must not be
+// able to smuggle javascript:/data: URLs into the renderer.
+function sanitizeIconUrl(url: string): string {
+  if (!url) return '';
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.toString() : '';
+  } catch {
+    return '';
+  }
+}
+
 export async function downloadAndParseEPG(
   epgUrl: string,
   progressCallback?: (status: string) => void
@@ -104,7 +116,7 @@ export function parseEPG(xmlText: string): EpgGuide {
       subTitle: subTitleNode?.textContent?.trim() || '',
       description: descNode?.textContent?.trim() || '',
       category: categoryNode?.textContent?.trim() || '',
-      iconUrl: iconNode?.getAttribute('src')?.trim() || '',
+      iconUrl: sanitizeIconUrl(iconNode?.getAttribute('src')?.trim() || ''),
       startUtc: start,
       stopUtc: stop,
       rawStart,

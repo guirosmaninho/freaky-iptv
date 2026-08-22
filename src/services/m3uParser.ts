@@ -149,7 +149,10 @@ function parseChannel(
   try {
     if (logo) {
       const parsedLogo = new URL(logo);
-      logoUrl = parsedLogo.toString();
+      // Reject unexpected schemes (javascript:, data:, ...) from untrusted playlists.
+      if (parsedLogo.protocol === 'http:' || parsedLogo.protocol === 'https:') {
+        logoUrl = parsedLogo.toString();
+      }
     }
   } catch {
     // Ignore invalid logo URL

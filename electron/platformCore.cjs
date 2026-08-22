@@ -75,9 +75,10 @@ function getFfmpegProxyModes(platform, audioEncoder) {
 
 function getFfmpegProbeArgs(platform, mode) {
   // A copy relay only has to identify the transport stream before it can pass
-  // through H.264 video. The smaller macOS probe avoids holding the first
-  // frame behind a multi-megabyte analysis window on live channels.
-  if (platform === 'darwin' && mode === 'copy') {
+  // H.264 video through, so the small probe avoids holding the first frame
+  // behind a multi-megabyte analysis window on live channels. Transcoding
+  // modes keep the full probe: the decoder needs complete stream parameters.
+  if (mode === 'copy') {
     return ['-analyzeduration', '250000', '-probesize', '524288'];
   }
   return ['-analyzeduration', '1000000', '-probesize', '2097152'];

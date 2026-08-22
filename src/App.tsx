@@ -318,6 +318,7 @@ export const App: React.FC = () => {
   const activeSessionRef = useRef<WatchSession | null>(null);
   const lastBufferingStartedAtMsRef = useRef<number | null>(null);
   const tickerRef = useRef<number | null>(null);
+  const startupTimerIdsRef = useRef<number[]>([]);
   const watchHistoryRef = useRef<WatchSession[]>([]);
   const openedReviewIdsRef = useRef<string[]>([]);
   const dismissedReviewIdsRef = useRef<string[]>([]);
@@ -615,22 +616,24 @@ export const App: React.FC = () => {
         if (settings.playlistUrl && shouldRefresh) {
           const capturedSettingsVersion = settingsVersionRef.current;
           // Delay background sync to let the UI boot and render smoothly first
-          window.setTimeout(() => {
+          const backgroundRefreshTimer = window.setTimeout(() => {
             const refreshSourcesInternal = refreshSourcesInternalRef.current;
             if (!refreshSourcesInternal || settingsVersionRef.current !== capturedSettingsVersion) return;
 
             refreshSourcesInternal(settings.playlistUrl, settings.epgUrl, settings.favoriteChannelIds || [], false, mappings, { persistSettings: false })
               .catch((e) => console.warn('Background sync failed:', e));
           }, 4000);
+          startupTimerIdsRef.current.push(backgroundRefreshTimer);
         }
 
         // E. AutoPlay last watched channel
         if (loadedAutoplayLastChannel && settings.lastPlayedChannelId && cacheValid) {
           const found = (cache?.channels || []).find((c: Channel) => c.id === settings.lastPlayedChannelId);
           if (found) {
-            setTimeout(() => {
+            const autoplayTimer = window.setTimeout(() => {
               void playChannelRef.current?.(found, false);
             }, 600);
+            startupTimerIdsRef.current.push(autoplayTimer);
           }
         }
       } catch (err) {
@@ -666,6 +669,8 @@ export const App: React.FC = () => {
 
     return () => {
       if (tickerRef.current) clearInterval(tickerRef.current);
+      for (const timerId of startupTimerIdsRef.current) clearTimeout(timerId);
+      startupTimerIdsRef.current = [];
       void endCurrentSessionRef.current();
       window.electron.clearDiscordActivity().catch(() => {});
     };
@@ -932,7 +937,16 @@ export const App: React.FC = () => {
 
     setPlaylistUrl(payload.playlistUrl);
     setEpgUrl(payload.epgUrl);
-    setQualityMappings(mappingsObj);
+    // Only replace the mappings when the content actually changed: a new
+    // object identity would restart live playback for an unrelated save.
+    const mappingsChanged = JSON.stringify(mappingsObj) !== JSON.stringify(qualityMappings);
+    if (mappingsChanged) {
+      setQualityMappings(mappingsObj);
+
+      const grouped = groupChannelsByQuality(rawChannels, mappingsObj);
+      setChannels(grouped);
+      setCategories(buildCategoryList(grouped));
+    }
     setAutoRefreshHours(payload.autoRefreshHours);
     setAutoplayLastChannel(payload.autoplayLastChannel);
     setHistoryRetentionDays(payload.historyRetentionDays);
@@ -944,10 +958,6 @@ export const App: React.FC = () => {
     setAppearance(payload.appearance);
     setLanguage(payload.language);
     setRecordingDirectory(payload.recordingDirectory);
-
-    const grouped = groupChannelsByQuality(rawChannels, mappingsObj);
-    setChannels(grouped);
-    setCategories(buildCategoryList(grouped));
 
     if (retainedHistory.length !== watchHistoryRef.current.length) {
       watchHistoryRef.current = retainedHistory;
@@ -1165,45 +1175,52 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // End active session and save to history file
+  // End active session and save to history file. Finalizations are serialized
+  // so rapid channel zapping cannot interleave history saves (lost or
+  // duplicated rows).
+  const sessionFinalizeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const endCurrentSession = useCallback(async () => {
-    const session = activeSessionRef.current;
-    if (!session) return;
+    const run = sessionFinalizeQueueRef.current.then(async () => {
+      const session = activeSessionRef.current;
+      if (!session) return;
 
-    session.endTimeUtc = new Date().toISOString();
-    const endMs = new Date(session.endTimeUtc).getTime();
-    const playbackStartMs = session.playbackStartedAtUtc
-      ? new Date(session.playbackStartedAtUtc).getTime()
-      : NaN;
-    const durationMs = Number.isFinite(playbackStartMs) ? Math.max(0, endMs - playbackStartMs) : 0;
-    session.playingDurationMs = durationMs;
+      session.endTimeUtc = new Date().toISOString();
+      const endMs = new Date(session.endTimeUtc).getTime();
+      const playbackStartMs = session.playbackStartedAtUtc
+        ? new Date(session.playbackStartedAtUtc).getTime()
+        : NaN;
+      const durationMs = Number.isFinite(playbackStartMs) ? Math.max(0, endMs - playbackStartMs) : 0;
+      session.playingDurationMs = durationMs;
 
-    if (lastBufferingStartedAtMsRef.current !== null && Number.isFinite(endMs)) {
-      const stallMs = Math.max(0, endMs - lastBufferingStartedAtMsRef.current);
-      session.stallDurationMs = (session.stallDurationMs || 0) + stallMs;
-      session.bufferingDurationMs = (session.bufferingDurationMs || 0) + stallMs;
-      lastBufferingStartedAtMsRef.current = null;
-    }
-    
-    // Apply a five-second filter to avoid noise in stats
-    const completedSession = { ...session };
-    activeSessionRef.current = null;
-
-    if (durationMs >= 5000) {
-      const appendedHistory = [...watchHistoryRef.current, completedSession];
-      const updatedHistory = pruneWatchHistory(appendedHistory, historyRetentionDays);
-      watchHistoryRef.current = updatedHistory;
-      startTransition(() => setWatchHistory(updatedHistory));
-
-      try {
-        const saved = updatedHistory.length === appendedHistory.length
-          ? await window.electron.appendHistory(completedSession)
-          : await window.electron.saveHistory(updatedHistory);
-        ensureIpcSuccess(saved, 'Failed to save history.');
-      } catch (err) {
-        console.error('Failed to save history:', err);
+      if (lastBufferingStartedAtMsRef.current !== null && Number.isFinite(endMs)) {
+        const stallMs = Math.max(0, endMs - lastBufferingStartedAtMsRef.current);
+        session.stallDurationMs = (session.stallDurationMs || 0) + stallMs;
+        session.bufferingDurationMs = (session.bufferingDurationMs || 0) + stallMs;
+        lastBufferingStartedAtMsRef.current = null;
       }
-    }
+
+      // Apply a five-second filter to avoid noise in stats
+      const completedSession = { ...session };
+      activeSessionRef.current = null;
+
+      if (durationMs >= 5000) {
+        const appendedHistory = [...watchHistoryRef.current, completedSession];
+        const updatedHistory = pruneWatchHistory(appendedHistory, historyRetentionDays);
+        watchHistoryRef.current = updatedHistory;
+        startTransition(() => setWatchHistory(updatedHistory));
+
+        try {
+          const saved = updatedHistory.length === appendedHistory.length
+            ? await window.electron.appendHistory(completedSession)
+            : await window.electron.saveHistory(updatedHistory);
+          ensureIpcSuccess(saved, 'Failed to save history.');
+        } catch (err) {
+          console.error('Failed to save history:', err);
+        }
+      }
+    });
+    sessionFinalizeQueueRef.current = run.catch(() => {});
+    await run;
   }, [historyRetentionDays]);
 
   useEffect(() => {

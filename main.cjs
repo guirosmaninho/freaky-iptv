@@ -132,9 +132,10 @@ function getEncryptionKey() {
     encryptionKey = crypto.pbkdf2Sync(machineGuid + '_' + username, salt, 10000, 32, 'sha256');
     return encryptionKey;
   } catch (err) {
-    console.error('Failed to derive encryption key, fallback to static salt:', err);
-    encryptionKey = crypto.pbkdf2Sync('FallbackMasterSecret', 'NebulaFallbackSalt', 10000, 32, 'sha256');
-    return encryptionKey;
+    // Fail closed: a hard-coded key would make the "encryption" equivalent to
+    // plaintext and could silently corrupt future reads.
+    encryptionKey = null;
+    throw new Error('Failed to derive the legacy encryption key: ' + (err && err.message));
   }
 }
 
@@ -175,7 +176,9 @@ function decrypt(base64Text) {
       return decrypted;
     } catch (fallbackErr) {
       console.error('Crypto fallback decryption failed:', fallbackErr);
-      return base64Text;
+      // Never return the ciphertext: callers would treat the encrypted blob as
+      // plaintext and the resulting invalid URL would block future saves.
+      return '';
     }
   }
 
@@ -646,6 +649,19 @@ function isTrustedLocalMediaUrl(urlText) {
   return Boolean(normalized && TRUSTED_LOCAL_MEDIA_URLS.has(normalized));
 }
 
+// Loopback media servers must not be reachable by arbitrary local web pages
+// (which can port-scan 127.0.0.1). Every URL handed to the renderer carries
+// this per-process random token; requests without it are rejected.
+const LOCAL_MEDIA_TOKEN = crypto.randomBytes(24).toString('hex');
+
+function localMediaTokenMatches(request) {
+  try {
+    return new URL(request.url || '/', 'http://127.0.0.1/').searchParams.get('token') === LOCAL_MEDIA_TOKEN;
+  } catch {
+    return false;
+  }
+}
+
 async function shouldBlockRendererNetworkRequest(details) {
   if (!mainWindow || mainWindow.isDestroyed() || details.webContentsId !== mainWindow.webContents.id) {
     return false;
@@ -824,8 +840,22 @@ function downloadPortableAsset(asset, destinationPath, onProgress) {
     const fail = (error) => {
       if (settled) return;
       settled = true;
-      fs.rmSync(destinationPath, { force: true });
-      reject(error);
+      // Close the write stream first: on Windows, rmSync on a file with an
+      // open handle throws EBUSY and this runs inside an event handler.
+      const removeTempFile = () => {
+        try {
+          fs.rmSync(destinationPath, { force: true });
+        } catch (rmError) {
+          console.warn('Failed to remove partial update download:', rmError.message);
+        }
+        reject(error);
+      };
+      if (output.closed) {
+        removeTempFile();
+      } else {
+        output.destroy();
+        output.once('close', removeTempFile);
+      }
     };
     const output = fs.createWriteStream(destinationPath, { flags: 'wx' });
     output.once('error', fail);
@@ -1483,7 +1513,7 @@ registerTrustedHandle('start-source-recording', async (event, request) => {
   // account. The relay remains alive after recording finalisation, so the
   // player never receives a spurious ended event.
   const relay = request.relayId ? playbackRelays.get(request.relayId) : null;
-  const recordingInputUrl = relay ? `${relay.url}?consumer=recording` : request.sourceUrl;
+  const recordingInputUrl = relay ? `${relay.url}&consumer=recording` : request.sourceUrl;
   const args = [
     '-hide_banner', '-loglevel', 'warning', '-user_agent', 'VLC/3.0.18 LibVLC/3.0.18',
     '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '4',
@@ -1664,11 +1694,17 @@ function stopRecordingPlaybackProxy() {
   const server = recordingPlaybackServer;
   recordingPlaybackServer = null;
   if (server.freakyIptvTrustedUrl) unregisterTrustedLocalMediaUrl(server.freakyIptvTrustedUrl);
+  for (const proc of server.freakyIptvTranscodes || []) {
+    try { if (!proc.killed) proc.kill(); } catch {}
+  }
+  server.freakyIptvTranscodes = null;
   try { server.close(); } catch {}
+  try { server.closeAllConnections(); } catch {}
 }
 
-function startRecordingPlaybackProxy(entry) {
+async function startRecordingPlaybackProxy(entry) {
   stopRecordingPlaybackProxy();
+  const preferredAacEncoder = await getPreferredAacEncoder();
   return new Promise((resolve, reject) => {
     const server = http.createServer((request, response) => {
       if (request.method === 'OPTIONS') {
@@ -1681,15 +1717,22 @@ function startRecordingPlaybackProxy(entry) {
         response.end();
         return;
       }
+      if (!localMediaTokenMatches(request)) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
 
       // Chromium cannot decode every MKV codec. Transcode only this local
       // playback request to fragmented MP4, preserving safe renderer isolation.
       const process = spawn(resolveFfmpegPath(), [
         '-hide_banner', '-loglevel', 'warning', '-i', entry.absolutePath,
         '-map', '0:v:0?', '-map', '0:a:0?', '-c:v', 'libx264', '-preset', 'veryfast',
-        '-pix_fmt', 'yuv420p', '-c:a', getPreferredAacEncoder(), '-movflags',
+        '-pix_fmt', 'yuv420p', '-c:a', preferredAacEncoder, '-movflags',
         '+frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1'
       ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      (server.freakyIptvTranscodes ||= new Set()).add(process);
+      process.once('exit', () => server.freakyIptvTranscodes?.delete(process));
       let headersSent = false;
       const beginResponse = () => {
         if (headersSent) return;
@@ -1716,7 +1759,7 @@ function startRecordingPlaybackProxy(entry) {
         return;
       }
       recordingPlaybackServer = server;
-      const url = `http://127.0.0.1:${address.port}/recording.mp4`;
+      const url = `http://127.0.0.1:${address.port}/recording.mp4?token=${LOCAL_MEDIA_TOKEN}`;
       server.freakyIptvTrustedUrl = url;
       registerTrustedLocalMediaUrl(url);
       resolve(url);
@@ -1881,13 +1924,28 @@ async function resolveNetworkTarget(hostname, allowPrivateNetwork = false) {
       throw new Error('Private and local network destinations are blocked.');
     }
     const result = { hostname: normalized, ...addresses[0] };
-    networkDnsCache.set(cacheKey, { result, expiresAt: Date.now() + DNS_CACHE_SUCCESS_TTL_MS });
+    rememberDnsCacheEntry(cacheKey, { result, expiresAt: Date.now() + DNS_CACHE_SUCCESS_TTL_MS });
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'The destination host did not resolve.';
-    networkDnsCache.set(cacheKey, { error: message, expiresAt: Date.now() + DNS_CACHE_FAILURE_TTL_MS });
+    rememberDnsCacheEntry(cacheKey, { error: message, expiresAt: Date.now() + DNS_CACHE_FAILURE_TTL_MS });
     throw error;
   }
+}
+
+// Keep the DNS cache bounded so a huge playlist cannot grow it forever.
+function rememberDnsCacheEntry(cacheKey, entry) {
+  if (networkDnsCache.size >= 1000) {
+    const now = Date.now();
+    for (const [key, value] of networkDnsCache) {
+      if (networkDnsCache.size < 1000) break;
+      if (value.expiresAt <= now) networkDnsCache.delete(key);
+    }
+    if (networkDnsCache.size >= 1000) {
+      networkDnsCache.delete(networkDnsCache.keys().next().value);
+    }
+  }
+  networkDnsCache.set(cacheKey, entry);
 }
 
 function createGuardedLookup(allowPrivateNetwork) {
@@ -2182,7 +2240,6 @@ registerTrustedHandle('download-url-text', async (event, url) => {
 let vlcProxyProcess = null;
 let upstreamRelayServer = null;
 let vlcOutputRelayServer = null;
-let ffmpegEncoderList = null;
 let proxyBytesDownloaded = 0;
 let playbackRelaySequence = 0;
 const playbackRelays = new Map();
@@ -2328,10 +2385,13 @@ function schedulePlaybackRelayReconnect(relay) {
     schedulePlaybackRelayIdleCheck(relay);
     return;
   }
+  // Exponential backoff so a dead provider is not hammered four times per
+  // second forever. Reset on any successful upstream connection.
+  const delay = Math.min(PLAYBACK_RELAY_RECONNECT_DELAY_MS * 2 ** relay.reconnectFailures, 30_000);
   relay.reconnectTimer = setTimeout(() => {
     relay.reconnectTimer = null;
     startPlaybackRelayUpstream(relay);
-  }, PLAYBACK_RELAY_RECONNECT_DELAY_MS);
+  }, delay);
 }
 
 function startPlaybackRelayUpstream(relay, currentUrl = relay.sourceUrl) {
@@ -2355,6 +2415,7 @@ function startPlaybackRelayUpstream(relay, currentUrl = relay.sourceUrl) {
     relay.headersReady = true;
     relay.connecting = false;
     relay.lastError = null;
+    relay.reconnectFailures = 0;
     for (const client of relay.clients) sendPlaybackRelayHeaders(relay, client);
 
     let settled = false;
@@ -2365,6 +2426,7 @@ function startPlaybackRelayUpstream(relay, currentUrl = relay.sourceUrl) {
       relay.connecting = false;
       if (error) {
         relay.lastError = error.message || String(error);
+        relay.reconnectFailures += 1;
         console.warn('Playback relay upstream interrupted:', relay.lastError);
       }
       // A new connection can start at a different transport-stream boundary.
@@ -2386,6 +2448,7 @@ function startPlaybackRelayUpstream(relay, currentUrl = relay.sourceUrl) {
   }).catch(error => {
     relay.lastError = error instanceof Error ? error.message : String(error);
     relay.connecting = false;
+    relay.reconnectFailures += 1;
     console.warn('Playback relay could not open upstream:', relay.lastError);
     schedulePlaybackRelayReconnect(relay);
   });
@@ -2413,6 +2476,7 @@ function startPlaybackRelayServer(sourceUrl) {
     lastError: null,
     idleTimer: null,
     reconnectTimer: null,
+    reconnectFailures: 0,
     playbackReleased: false,
     closed: false
   };
@@ -2428,6 +2492,11 @@ function startPlaybackRelayServer(sourceUrl) {
       if (clientReq.method !== 'GET') {
         writeCorsHeaders(clientRes, { statusCode: 405 });
         clientRes.end('Method not allowed');
+        return;
+      }
+      if (!localMediaTokenMatches(clientReq)) {
+        clientRes.writeHead(404);
+        clientRes.end();
         return;
       }
 
@@ -2461,7 +2530,7 @@ function startPlaybackRelayServer(sourceUrl) {
         return;
       }
       relay.server = server;
-      relay.url = `http://127.0.0.1:${address.port}/source`;
+      relay.url = `http://127.0.0.1:${address.port}/source?token=${LOCAL_MEDIA_TOKEN}`;
       registerTrustedLocalMediaUrl(relay.url);
       playbackRelays.set(relay.id, relay);
       playbackRelayBySourceUrl.set(sourceUrl, relay.id);
@@ -2470,32 +2539,43 @@ function startPlaybackRelayServer(sourceUrl) {
   });
 }
 
-function getFfmpegEncoderList() {
+let ffmpegEncoderList = null;
+
+// Detect available FFmpeg encoders without blocking the main thread: the old
+// spawnSync could freeze the whole app for up to 3 seconds on the first use.
+async function getFfmpegEncoderList() {
   if (ffmpegEncoderList !== null) {
     return ffmpegEncoderList;
   }
 
-  try {
-    const result = spawnSync(resolveFfmpegPath(), ['-hide_banner', '-encoders'], {
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 3000
+  return new Promise((resolve) => {
+    let output = '';
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // Only cache successful detections so transient failures can retry.
+      if (value) ffmpegEncoderList = value;
+      resolve(value);
+    };
+    const child = spawn(resolveFfmpegPath(), ['-hide_banner', '-encoders'], {
+      windowsHide: true
     });
-    ffmpegEncoderList = `${result.stdout || ''}\n${result.stderr || ''}`;
-  } catch (e) {
-    console.warn('Failed to detect FFmpeg encoders:', e);
-    ffmpegEncoderList = '';
-  }
-
-  return ffmpegEncoderList;
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      finish('');
+    }, 3000);
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { output += chunk; });
+    child.once('error', () => finish(''));
+    child.once('close', () => finish(output));
+  });
 }
 
-function hasFfmpegEncoder(name) {
-  return new RegExp(`\\b${name}\\b`).test(getFfmpegEncoderList());
-}
-
-function getPreferredAacEncoder() {
-  return process.platform === 'win32' && hasFfmpegEncoder('aac_mf') ? 'aac_mf' : 'aac';
+async function getPreferredAacEncoder() {
+  const list = await getFfmpegEncoderList();
+  return process.platform === 'win32' && new RegExp('\\baac_mf\\b').test(list) ? 'aac_mf' : 'aac';
 }
 
 function findLibVlcProxyHelperPath() {
@@ -2557,6 +2637,11 @@ function startUpstreamRelay(sourceUrl) {
   proxyBytesDownloaded = 0;
   return new Promise((resolve, reject) => {
     const server = http.createServer((clientReq, clientRes) => {
+      if (!localMediaTokenMatches(clientReq)) {
+        clientRes.writeHead(404);
+        clientRes.end();
+        return;
+      }
       const pipeUrl = (currentUrl, redirectCount = 0) => {
         let upstreamUrl;
         try {
@@ -2695,7 +2780,7 @@ function startUpstreamRelay(sourceUrl) {
       }
 
       upstreamRelayServer = server;
-      const relayUrl = `http://127.0.0.1:${address.port}/source`;
+      const relayUrl = `http://127.0.0.1:${address.port}/source?token=${LOCAL_MEDIA_TOKEN}`;
       server.freakyIptvTrustedUrl = relayUrl;
       registerTrustedLocalMediaUrl(relayUrl);
       resolve(relayUrl);
@@ -2725,6 +2810,11 @@ function startVlcOutputRelay(vlcOutputUrl) {
       if (clientReq.method !== 'GET') {
         writeCorsHeaders(clientRes, { statusCode: 405 });
         clientRes.end('Method not allowed');
+        return;
+      }
+      if (!localMediaTokenMatches(clientReq)) {
+        clientRes.writeHead(404);
+        clientRes.end();
         return;
       }
 
@@ -2767,7 +2857,7 @@ function startVlcOutputRelay(vlcOutputUrl) {
       }
 
       vlcOutputRelayServer = server;
-      const relayUrl = `http://127.0.0.1:${address.port}/stream`;
+      const relayUrl = `http://127.0.0.1:${address.port}/stream?token=${LOCAL_MEDIA_TOKEN}`;
       server.freakyIptvTrustedUrl = relayUrl;
       registerTrustedLocalMediaUrl(relayUrl);
       resolve(relayUrl);
@@ -2891,11 +2981,16 @@ registerTrustedHandle('start-vlc-proxy', async (event, url, options = {}) => {
     const requestedMode = options && options.mode === 'hardware'
       ? (process.platform === 'darwin' ? 'hardware-videotoolbox' : 'hardware-d3d11')
       : 'copy';
-    const audioEncoder = getPreferredAacEncoder();
+    const audioEncoder = await getPreferredAacEncoder();
 
     vlcOutputRelayServer = http.createServer((req, res) => {
       if (req.method === 'OPTIONS') {
         writeCorsHeaders(res, { statusCode: 204 });
+        res.end();
+        return;
+      }
+      if (!localMediaTokenMatches(req)) {
+        res.writeHead(404);
         res.end();
         return;
       }
@@ -3020,7 +3115,7 @@ registerTrustedHandle('start-vlc-proxy', async (event, url, options = {}) => {
       vlcOutputRelayServer.on('error', reject);
       vlcOutputRelayServer.listen(0, '127.0.0.1', () => {
         const address = vlcOutputRelayServer.address();
-        const trustedUrl = `http://127.0.0.1:${address.port}/stream`;
+        const trustedUrl = `http://127.0.0.1:${address.port}/stream?token=${LOCAL_MEDIA_TOKEN}`;
         vlcOutputRelayServer.freakyIptvTrustedUrl = trustedUrl;
         registerTrustedLocalMediaUrl(trustedUrl);
         console.log(`[FFmpeg proxy] Relay server listening on local port: ${address.port}`);
@@ -3312,6 +3407,13 @@ app.on('before-quit', () => {
   setPlaybackAwake(false);
   stopVlcProxyProcess();
   stopRecordingPlaybackProxy();
+  // FFmpeg children survive parent exit on Windows; stop any active recording
+  // immediately so it does not keep downloading after the app closes.
+  if (recordingProcess && !recordingProcess.killed) {
+    try { recordingProcess.stdin.write('q\n'); } catch {}
+    try { recordingProcess.kill(); } catch {}
+    recordingProcess = null;
+  }
   void dataStore.close();
 });
 
