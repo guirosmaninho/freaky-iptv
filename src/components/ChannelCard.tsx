@@ -1,3 +1,5 @@
+import { formatProgrammeTime as formatTime } from '../services/programmeTime';
+import { useI18n } from '../hooks/useI18n';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel, EPGProgram } from '../types';
 import { getChannelQualityLabel } from '../services/utils';
@@ -24,14 +26,7 @@ const getInitials = (name: string) => {
     .toUpperCase();
 };
 
-const formatTime = (isoString: string) => {
-  try {
-    const date = new Date(isoString);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return '';
-  }
-};
+
 
 const ChannelCardComponent: React.FC<ChannelCardProps> = ({
   channel,
@@ -44,6 +39,7 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
   activeChannelId,
   qualityMappings
 }) => {
+  const { t, locale } = useI18n();
   const [logoFailed, setLogoFailed] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -115,7 +111,7 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
     >
       <button
         type="button"
-        aria-label={`Play ${channel.name}`}
+        aria-label={t('Play {channel}', { channel: channel.name })}
         onClick={() => onPlay(channel)}
         style={{
           position: 'absolute',
@@ -142,8 +138,8 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
                 setIsDropdownOpen(true);
               }
             }}
-            title="Choose transmission quality"
-            aria-label={`Choose transmission quality for ${channel.name}`}
+            title={t("Choose transmission quality")}
+            aria-label={t('Choose transmission quality for {channel}', { channel: channel.name })}
             aria-expanded={isDropdownOpen}
             aria-haspopup="menu"
             aria-controls={`quality-menu-${channel.id}`}
@@ -193,7 +189,7 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
               ref={qualityMenuRef}
               id={`quality-menu-${channel.id}`}
               role="menu"
-              aria-label={`Transmission quality for ${channel.name}`}
+              aria-label={t('Transmission quality for {channel}', { channel: channel.name })}
               onBlur={(event) => {
                 if (!event.currentTarget.contains(event.relatedTarget)) {
                   closeQualityMenu(false);
@@ -232,9 +228,6 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
                 cursor: 'default'
               }}
             >
-              <div style={{ padding: '4px 8px', fontSize: '9.5px', color: 'var(--text-tertiary)', fontWeight: 600, letterSpacing: '0.5px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '4px' }}>
-                SELECT QUALITY
-              </div>
               {channel.variants.map((v) => {
                 const isSelected = v.id === activeChannelId;
                 const q = getChannelQualityLabel(v.name, qualityMappings);
@@ -275,7 +268,7 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
                       e.currentTarget.style.color = isSelected ? 'var(--accent-primary)' : 'var(--text-secondary)';
                     }}
                   >
-                    <span>{q}</span>
+                    <span>{t(q)}</span>
                     {isSelected && (
                       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5">
                         <polyline points="20 6 9 17 4 12" />
@@ -296,7 +289,7 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
           e.stopPropagation();
           onToggleFavorite(channel);
         }}
-        aria-label={`${isFavorite ? 'Remove' : 'Add'} ${channel.name} ${isFavorite ? 'from' : 'to'} favorites`}
+        aria-label={t(isFavorite ? 'Remove {channel} from favorites' : 'Add {channel} to favorites', { channel: channel.name })}
         aria-pressed={isFavorite}
         style={{
           position: 'absolute',
@@ -450,21 +443,7 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
             {channel.name}
           </h3>
           
-          {/* Group Category */}
-          <div 
-            title={channel.groupTitle}
-            style={{
-              fontSize: '10.5px',
-              color: 'var(--text-tertiary)',
-              fontWeight: 500,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              fontFamily: 'inherit'
-            }}
-          >
-            {channel.groupTitle}
-          </div>
+
         </div>
 
         {/* EPG Program Area */}
@@ -519,23 +498,11 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
                   fontFamily: 'inherit'
                 }}
               >
-                <span>{formatTime(currentProgram.startUtc)}</span>
-                <span>{formatTime(currentProgram.stopUtc)}</span>
+                <span>{formatTime(currentProgram.startUtc, locale)}</span>
+                <span>{formatTime(currentProgram.stopUtc, locale)}</span>
               </div>
             </div>
-          ) : (
-            <div 
-              style={{
-                fontSize: '10.5px',
-                color: 'var(--text-tertiary)',
-                fontStyle: 'italic',
-                paddingTop: '4px',
-                fontFamily: 'inherit'
-              }}
-            >
-              No guide programme
-            </div>
-          )}
+          ) : null}
         </div>
       </div>
     </article>

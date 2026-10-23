@@ -1,5 +1,5 @@
+import { SaxesParser } from 'saxes';
 import type { EpgGuide, EPGProgram, ParserIssue, Channel } from '../types';
-import { downloadText } from './downloadText';
 import { normalizeKey } from './utils';
 
 // Only http(s) icon URLs are kept: an untrusted XMLTV document must not be
@@ -14,136 +14,100 @@ function sanitizeIconUrl(url: string): string {
   }
 }
 
-export async function downloadAndParseEPG(
-  epgUrl: string,
-  progressCallback?: (status: string) => void
-): Promise<EpgGuide> {
-  if (progressCallback) progressCallback('Downloading TV guide...');
-  
-  const text = await downloadText(epgUrl, 'Failed to download EPG');
-  if (progressCallback) progressCallback('Parsing TV guide...');
-  return parseEPG(text);
-}
+export { downloadAndParseEPG } from './epgDownload';
 
+/** Parse XMLTV once, without constructing a second in-memory XML document. */
 export function parseEPG(xmlText: string): EpgGuide {
-  if (typeof DOMParser === 'undefined') {
-    throw new Error('XML parsing error: XML parser is unavailable in this process.');
-  }
-  const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
-  
-  const parserError = xmlDoc.querySelector('parsererror');
   const issues: ParserIssue[] = [];
-  if (parserError) {
-    throw new Error(`XML parsing error: ${parserError.textContent?.trim() || 'invalid XMLTV document'}`);
-  }
+  // Source identifiers are untrusted, including names such as __proto__.
+  const displayNames: Record<string, string> = Object.create(null);
+  const normalizedNames: Record<string, string> = Object.create(null);
+  const programsByChannel: Record<string, EPGProgram[]> = Object.create(null);
+  type Entry = {
+    kind: 'channel' | 'programme';
+    depth: number;
+    index: number;
+    attributes: Record<string, string>;
+    fields: Record<string, string>;
+  };
+  let entry: Entry | null = null;
+  let field: { name: string; depth: number; text: string } | null = null;
+  let depth = 0;
+  let channelIndex = 0;
+  let programmeIndex = 0;
+  const textFields = new Set(['display-name', 'title', 'sub-title', 'desc', 'category']);
+  const parser = new SaxesParser({ xmlns: false });
 
-  const displayNames: Record<string, string> = {};
-  const normalizedNames: Record<string, string> = {};
-  const programsByChannel: Record<string, EPGProgram[]> = {};
-
-  // Parse Channels
-  const channelNodes = xmlDoc.querySelectorAll('channel');
-  channelNodes.forEach((node, index) => {
-    const id = node.getAttribute('id')?.trim();
-    if (!id) {
-      issues.push({
-        sourceType: 'XMLTV',
-        lineNumber: index + 1,
-        message: `Channel node at index ${index} has no id.`
-      });
+  const finishEntry = (value: Entry) => {
+    const { attributes, fields, index } = value;
+    const issue = (message: string) => issues.push({ sourceType: 'XMLTV', lineNumber: index + 1, message });
+    if (value.kind === 'channel') {
+      const id = attributes.id?.trim();
+      if (!id) { issue(`Channel node at index ${index} has no id.`); return; }
+      if (Object.hasOwn(displayNames, id)) {
+        issue(`Duplicate XMLTV channel id '${id}' encountered; first display name is kept.`);
+        return;
+      }
+      const name = fields['display-name']?.trim() || id;
+      displayNames[id] = name;
+      const normalized = normalizeKey(name);
+      if (normalized && !Object.hasOwn(normalizedNames, normalized)) normalizedNames[normalized] = id;
       return;
     }
-    
-    const displayNameNode = node.querySelector('display-name');
-    const displayName = displayNameNode ? displayNameNode.textContent?.trim() : '';
-    
-    if (displayNames[id] !== undefined) {
-      issues.push({
-        sourceType: 'XMLTV',
-        lineNumber: index + 1,
-        message: `Duplicate XMLTV channel id '${id}' encountered; first display name is kept.`
-      });
-      return;
-    }
-    
-    const finalDisplayName = displayName || id;
-    displayNames[id] = finalDisplayName;
-    
-    const normalized = normalizeKey(finalDisplayName);
-    if (normalized && normalizedNames[normalized] === undefined) {
-      normalizedNames[normalized] = id;
-    }
-  });
-
-  // Parse Programmes
-  const programmeNodes = xmlDoc.querySelectorAll('programme');
-  programmeNodes.forEach((node, index) => {
-    const channelId = node.getAttribute('channel')?.trim() || '';
-    const rawStart = node.getAttribute('start')?.trim() || '';
-    const rawStop = node.getAttribute('stop')?.trim() || '';
-    
-    if (!channelId) {
-      issues.push({
-        sourceType: 'XMLTV',
-        lineNumber: index + 1,
-        message: `Programme at index ${index} has no channel id.`
-      });
-      return;
-    }
-    
+    const channelId = attributes.channel?.trim() || '';
+    if (!channelId) { issue(`Programme at index ${index} has no channel id.`); return; }
+    const rawStart = attributes.start?.trim() || '';
+    const rawStop = attributes.stop?.trim() || '';
     const start = parseXmlTvDate(rawStart);
     const stop = parseXmlTvDate(rawStop);
-    
-    if (!start || !stop || new Date(stop) <= new Date(start)) {
-      issues.push({
-        sourceType: 'XMLTV',
-        lineNumber: index + 1,
-        message: `Programme at index ${index} has invalid start/stop timestamps.`
-      });
+    if (!start || !stop || stop <= start) {
+      issue(`Programme at index ${index} has invalid start/stop timestamps.`);
       return;
     }
-    
-    const titleNode = node.querySelector('title');
-    const subTitleNode = node.querySelector('sub-title');
-    const descNode = node.querySelector('desc');
-    const categoryNode = node.querySelector('category');
-    const iconNode = node.querySelector('icon');
-    
-    const program: EPGProgram = {
+    (programsByChannel[channelId] ||= []).push({
       channelId,
-      title: titleNode?.textContent?.trim() || 'Untitled programme',
-      subTitle: subTitleNode?.textContent?.trim() || '',
-      description: descNode?.textContent?.trim() || '',
-      category: categoryNode?.textContent?.trim() || '',
-      iconUrl: sanitizeIconUrl(iconNode?.getAttribute('src')?.trim() || ''),
-      startUtc: start,
-      stopUtc: stop,
-      rawStart,
-      rawStop
-    };
-    
-    if (!programsByChannel[channelId]) {
-      programsByChannel[channelId] = [];
-    }
-    programsByChannel[channelId].push(program);
-  });
-
-  // Sort programs by start time lexicographically since startUtc is in ISO-8601 format
-  for (const channelId in programsByChannel) {
-    programsByChannel[channelId].sort((a, b) => {
-      if (a.startUtc < b.startUtc) return -1;
-      if (a.startUtc > b.startUtc) return 1;
-      return 0;
+      title: fields.title?.trim() || 'Untitled programme',
+      subTitle: fields['sub-title']?.trim() || '',
+      description: fields.desc?.trim() || '',
+      category: fields.category?.trim() || '',
+      iconUrl: sanitizeIconUrl(fields.icon?.trim() || ''),
+      startUtc: start, stopUtc: stop, rawStart, rawStop
     });
-  }
-
-  return {
-    programsByChannel,
-    displayNames,
-    normalizedNames,
-    issues
   };
+
+  parser.on('opentag', tag => {
+    if (depth === 0 && tag.name !== 'tv') throw new Error('Expected an XMLTV tv root element.');
+    depth++;
+    if (!entry && (tag.name === 'channel' || tag.name === 'programme')) {
+      entry = {
+        kind: tag.name, depth, attributes: tag.attributes, fields: Object.create(null),
+        index: tag.name === 'channel' ? channelIndex++ : programmeIndex++
+      };
+    } else if (entry && !field && !Object.hasOwn(entry.fields, tag.name)) {
+      if (textFields.has(tag.name)) field = { name: tag.name, depth, text: '' };
+      else if (tag.name === 'icon') entry.fields.icon = tag.attributes.src || '';
+    }
+  });
+  const appendText = (text: string) => { if (field) field.text += text; };
+  parser.on('text', appendText);
+  parser.on('cdata', appendText);
+  parser.on('closetag', () => {
+    if (field?.depth === depth && entry) {
+      entry.fields[field.name] = field.text;
+      field = null;
+    }
+    if (entry?.depth === depth) { finishEntry(entry); entry = null; }
+    depth--;
+  });
+  // Saxes rejects malformed entities, invalid characters and trailing content.
+  // It does not fetch DTDs or resolve external entities.
+  try { parser.write(xmlText).close(); }
+  catch (error) { throw new Error(`XML parsing error: ${error instanceof Error ? error.message : 'invalid XMLTV document'}`, { cause: error }); }
+
+  for (const programs of Object.values(programsByChannel)) {
+    programs.sort((a, b) => a.startUtc < b.startUtc ? -1 : a.startUtc > b.startUtc ? 1 : 0);
+  }
+  return { programsByChannel, displayNames, normalizedNames, issues };
 }
 
 export function parseXmlTvDate(value: string): string | null {

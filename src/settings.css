@@ -1,0 +1,134 @@
+.settings-page.settings-page--grouped {
+  display: flex !important;
+  flex-direction: column;
+  width: min(1160px, 100%);
+  min-height: 0;
+  height: 100%;
+  margin: 0 auto;
+  padding: 8px 4px 12px !important;
+  gap: 16px !important;
+  overflow: hidden;
+}
+
+.app-main-surface--compact-player .settings-page.settings-page--grouped {
+  height: calc(100% - 180px);
+  padding-bottom: 12px !important;
+}
+
+.settings-workspace {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.settings-category-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.settings-category-nav button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 44px;
+  padding: 11px 14px;
+  text-align: left;
+  color: var(--ui-text-secondary);
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-control);
+  background: transparent;
+  cursor: pointer;
+}
+
+.settings-category-nav button:hover { background: var(--ui-surface-hover); }
+.settings-category-nav button.is-selected {
+  border-color: var(--ui-border);
+  background: var(--ui-selection);
+  color: var(--ui-text-primary);
+}
+.settings-category-nav strong { font-size: 13px; font-weight: 650; }
+.settings-category-nav small { color: var(--ui-text-tertiary); font-size: 11px; line-height: 1.4; }
+
+.settings-category-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  max-height: 100%;
+  padding: 0 4px 12px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.settings-page--grouped .settings-group { flex: 0 0 auto; gap: 18px; padding: 22px; }
+.settings-page--grouped .settings-group-heading { padding-bottom: 14px; border-bottom: 1px solid var(--ui-border); }
+.settings-page--grouped .settings-group-heading h3 { font-size: 18px !important; }
+.settings-page--grouped .settings-group-heading p { margin: 4px 0 0; line-height: 1.5; }
+.settings-page--grouped .appearance-segmented { align-self: flex-start; flex-wrap: wrap; }
+.settings-page--grouped .settings-save-bar { bottom: 0; margin-top: auto; }
+.settings-page--grouped .settings-field > span { flex-wrap: wrap; }
+.settings-page--grouped .settings-backup-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.settings-page--grouped .settings-backup-fields button { min-height: 42px; }
+.settings-page--grouped .settings-backup-fields > button:first-of-type { grid-column: 1 / -1; }
+
+.settings-source-list { display: flex; flex-direction: column; gap: 18px; }
+.settings-source-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-control);
+  background: var(--ui-surface-1);
+}
+.settings-source-card legend { max-width: 100%; padding: 0 7px; overflow-wrap: anywhere; color: var(--ui-text-primary); font-size: 13px; font-weight: 650; }
+.settings-source-card[data-enabled="false"] { background: var(--ui-selection); }
+.settings-source-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.settings-source-toggle { display: flex; align-items: center; gap: 8px; color: var(--ui-text-secondary); font-size: 12px; cursor: pointer; }
+.settings-source-toggle input { accent-color: var(--ui-accent); }
+.settings-source-toolbar .btn-secondary { font-size: 11px; }
+.settings-add-source { align-self: flex-start; }
+.settings-source-empty { padding: 25px; text-align: center; border: 1px dashed var(--ui-border); border-radius: var(--ui-radius-control); }
+.settings-source-empty strong { color: var(--ui-text-primary); font-size: 15px; }
+.settings-source-empty p { max-width: 420px; margin: 10px auto 18px; color: var(--ui-text-tertiary); font-size: 12px; line-height: 1.6; }
+.settings-setup-intro { display: flex; align-items: flex-start; gap: 12px; padding: 15px; background: var(--ui-selection); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); }
+.settings-step-number { display: grid; place-items: center; flex: 0 0 28px; height: 28px; border-radius: 50%; color: var(--ui-text-primary); background: var(--ui-surface-1); font-size: 13px; font-weight: 700; }
+.settings-setup-intro strong, .settings-sync-summary strong { color: var(--ui-text-primary); font-size: 13px; }
+.settings-setup-intro p, .settings-sync-summary p { margin: 5px 0 0; color: var(--ui-text-secondary); font-size: 12px; line-height: 1.5; }
+.settings-sync-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); background: var(--ui-selection); }
+.settings-source-result { margin: 0; color: var(--ui-text-secondary); font-size: 12px; line-height: 1.5; }
+.settings-validation-error { margin: 0; color: var(--ui-danger); font-size: 12px; }
+
+@media (max-width: 1000px) {
+  .settings-workspace { grid-template-columns: 150px minmax(0, 1fr); gap: 12px; }
+  .settings-page--grouped .settings-group { padding: 18px; }
+  .settings-page--grouped .settings-data-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .settings-page--grouped .settings-status-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  .settings-workspace { display: flex; flex-direction: column; gap: 14px; align-items: stretch; }
+  .settings-category-nav { flex-direction: row; flex: 0 0 auto; overflow-x: auto; gap: 5px; padding-bottom: 3px; }
+  .settings-category-nav button { align-items: center; flex: 0 0 auto; min-height: 40px; padding: 9px 12px; }
+  .settings-category-nav small { display: none; }
+  .settings-category-panel { flex: 1 1 auto; }
+  .settings-page--grouped .settings-group { padding: 16px; }
+  .settings-page--grouped .settings-backup-fields { grid-template-columns: 1fr; }
+  .settings-sync-summary { align-items: stretch; flex-direction: column; }
+  .settings-source-actions { flex-wrap: wrap; }
+  .settings-page--grouped .settings-save-bar { gap: 9px; }
+}
+
+.settings-number-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.settings-zero-option { display: inline-flex; align-items: center; gap: 8px; color: var(--ui-text-secondary); cursor: pointer; }
+.settings-zero-option input { accent-color: var(--ui-accent); }
+.settings-number-controls > .text-input { width: 120px; }
+.settings-switch-row { align-items: center; }

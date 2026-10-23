@@ -15,3 +15,7 @@ The optional native compatibility helper uses LibVLCSharp together with the
 platform-specific VideoLAN LibVLC runtime packages. LibVLC is distributed under
 its applicable LGPL terms. Source and licensing information are available from
 https://code.videolan.org/videolan/LibVLCSharp and https://www.videolan.org/.
+
+The background XMLTV parser bundles saxes (ISC) and xmlchars (MIT).
+Source and licenses: https://github.com/lddubeau/saxes and
+https://github.com/lddubeau/xmlchars.

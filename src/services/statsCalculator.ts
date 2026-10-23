@@ -1,3 +1,5 @@
+import { getLocale, translate } from './i18n';
+import { localeDateFormatter } from './localeDateFormatter';
 import type { WatchSession } from '../types';
 import { getChannelBaseNamePreserveCase } from './utils';
 
@@ -106,24 +108,24 @@ export type NormalizedWatchSession = WatchSession & {
   statChannelName: string;
 };
 
-const MONTH_YEAR_FORMATTER = new Intl.DateTimeFormat('en-US', {
+const MONTH_YEAR_FORMATTER = localeDateFormatter({
   month: 'short',
   year: 'numeric'
 });
-const HEATMAP_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
+const HEATMAP_DATE_FORMATTER = localeDateFormatter({
   weekday: 'short',
   month: 'short',
   day: 'numeric',
   year: 'numeric'
 });
-const SESSION_DATE_TIME_FORMATTER = new Intl.DateTimeFormat('en-GB', {
+const SESSION_DATE_TIME_FORMATTER = localeDateFormatter({
   weekday: 'short',
   day: '2-digit',
   month: 'short',
   year: 'numeric',
   hour: '2-digit',
   minute: '2-digit'
-});
+}, 'en-GB');
 
 export function normalizeWatchSessions(
   sessions: WatchSession[],
@@ -275,15 +277,15 @@ export function computeStats(sessions: WatchSession[], options: ComputeStatsOpti
     totalDataFormatted: formatBytes(totalBytes),
     yearDataFormatted: formatBytes(currentYearBytes),
     monthDataFormatted: formatBytes(currentMonthBytes),
-    totalSessions: validSessions.length.toLocaleString(),
+    totalSessions: validSessions.length.toLocaleString(getLocale()),
     avgSessionLength: formatDuration(totalDurationMs / validSessions.length),
     longestSession: longestSession ? formatDuration(longestSessionMs) : '-',
     longestSessionChannel: longestSession ? longestSession.statChannelName : '',
     longestSessionStartedAt: longestSession ? formatSessionDateTime(new Date(longestSession.statStartMs).toISOString()) : '',
     peakHour: topHour,
     peakDay: topDay,
-    uniqueChannelsWatched: uniqueChannels.size.toLocaleString(),
-    unmeasuredSessions: unmeasuredSessionCount.toLocaleString(),
+    uniqueChannelsWatched: uniqueChannels.size.toLocaleString(getLocale()),
+    unmeasuredSessions: unmeasuredSessionCount.toLocaleString(getLocale()),
     unmeasuredWatchTime: formatDuration(unmeasuredDurationMs),
     topChannelsAllTime: buildTopChannels(validSessions, 10),
     topChannelsLastMonth: buildTopChannels(validSessions, 10, startOfCurrentMonthMs),
@@ -424,7 +426,7 @@ function buildDayBars(sessions: NormalizedWatchSession[]): DayBar[] {
   const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   return Array.from({ length: 7 }, (_, day) => ({
-    dayName: names[day],
+    dayName: translate(names[day]),
     fraction: byDay[day] / max,
     totalMs: byDay[day]
   }));
@@ -468,7 +470,7 @@ function buildHeatmap(sessions: NormalizedWatchSession[], now: Date): { cells: H
       intensity,
       tooltip: mins > 0
         ? `${dateLabel}: ${formatDuration(mins * 60 * 1000)}`
-        : `${dateLabel}: No activity`
+        : `${dateLabel}: ${translate('No activity')}`
     });
 
     currentDate.setDate(currentDate.getDate() + 1);
@@ -577,7 +579,7 @@ function buildStatsCardData(
     return cellMs >= startOfLocalDay(new Date(rangeStartMs)).getTime()
       && cellMs <= startOfLocalDay(new Date(rangeEndMs)).getTime();
   });
-  const periodFormatter = new Intl.DateTimeFormat('en-GB', {
+  const periodFormatter = localeDateFormatter({
     day: '2-digit',
     month: 'short',
     year: 'numeric'
@@ -590,8 +592,8 @@ function buildStatsCardData(
     periodStart: periodFormatter.format(new Date(rangeStartMs)),
     periodEnd: periodFormatter.format(new Date(rangeEndMs)),
     totalWatchTime: formatDuration(totalDurationMs),
-    totalSessions: sessions.length.toLocaleString(),
-    uniqueChannelsWatched: uniqueChannels.size.toLocaleString(),
+    totalSessions: sessions.length.toLocaleString(getLocale()),
+    uniqueChannelsWatched: uniqueChannels.size.toLocaleString(getLocale()),
     longestSession: longest ? formatDuration(longest.statDurationMs) : '-',
     longestSessionChannel: longest?.statChannelName || '',
     heatmapCells: heatmap,

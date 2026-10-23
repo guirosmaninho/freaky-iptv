@@ -1,4 +1,4 @@
-import type { EPGProgram } from '../types';
+import type { Channel, EPGProgram } from '../types';
 
 export type ChannelEpgInfo = {
   program: EPGProgram | null;
@@ -77,11 +77,13 @@ const findProgramIndexAt = (programs: EPGProgram[], nowMs: number) => {
 
   // Prefer the active entry with the latest start time. If that entry has
   // ended, walk backwards to support gaps and nested overlaps.
-  if (low === 0 || getProgramScheduleIndex(programs).prefixMaxStopMs[low - 1] <= nowMs) {
-    return -1;
-  }
+  if (low === 0) return -1;
+  // Most feeds have a current entry at the search boundary. Resolve it before
+  // building the overlap index across what may be months of guide data.
+  if (nowMs < getProgramTimes(programs[low - 1]).stopMs) return low - 1;
+  if (getProgramScheduleIndex(programs).prefixMaxStopMs[low - 1] <= nowMs) return -1;
 
-  for (let index = low - 1; index >= 0; index--) {
+  for (let index = low - 2; index >= 0; index--) {
     if (nowMs < getProgramTimes(programs[index]).stopMs) {
       return index;
     }
@@ -125,10 +127,8 @@ export const getEpgInfoFromPrograms = (
     progress = Math.max(0, Math.min(100, ((nowMs - startMs) / (stopMs - startMs)) * 100));
   }
 
-  const upcomingStartIndex = activeIndex >= 0
-    ? activeIndex + 1
-    : findNextProgramIndex(programs, nowMs);
   const nextProgramIndex = findNextProgramIndex(programs, nowMs);
+  const upcomingStartIndex = activeIndex >= 0 ? activeIndex + 1 : nextProgramIndex;
   const nextStartMs = nextProgramIndex < programs.length
     ? getProgramTimes(programs[nextProgramIndex]).startMs
     : Number.POSITIVE_INFINITY;
@@ -144,3 +144,17 @@ export const getEpgInfoFromPrograms = (
     nextChangeAtMs: Number.isFinite(nextChangeAtMs) ? nextChangeAtMs : null
   };
 };
+
+/** One reader per immutable guide/tick; variants share their schedule result. */
+export function createChannelEpgReader(lookup: ReadonlyMap<string, EPGProgram[]>, nowMs: number) {
+  const cached = new WeakMap<EPGProgram[], ChannelEpgInfo>();
+  return (channel: Channel): ChannelEpgInfo => {
+    const programs = lookup.get(channel.id);
+    if (!programs?.length) return EMPTY_CHANNEL_EPG_INFO;
+    const existing = cached.get(programs);
+    if (existing) return existing;
+    const info = getEpgInfoFromPrograms(programs, nowMs);
+    cached.set(programs, info);
+    return info;
+  };
+}

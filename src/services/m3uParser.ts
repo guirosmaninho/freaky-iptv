@@ -1,3 +1,4 @@
+import { parseUsingWorker } from './parserWorkerClient';
 import type { Channel, ParserIssue, M3UPlaylist } from '../types';
 import { downloadText } from './downloadText';
 import { sha256Short, normalizeKey } from './utils';
@@ -12,7 +13,7 @@ export async function downloadAndParseM3U(
   const sourceHash = sha256Short(playlistUrl);
   
   if (progressCallback) progressCallback('Parsing playlist...');
-  return parseM3U(text, sourceHash);
+  return parseUsingWorker<M3UPlaylist>({ kind: 'm3u', text, sourceHash }) ?? parseM3U(text, sourceHash);
 }
 
 export function parseM3U(text: string, sourceUrlHash: string): M3UPlaylist {

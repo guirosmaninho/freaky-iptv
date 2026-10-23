@@ -48,7 +48,7 @@ Click the button below to get the latest stable release for Windows (Installer o
 For development and local builds:
 
 - Windows x64, or macOS Intel/Apple Silicon.
-- Node.js 22 with npm.
+- Node.js >=24.15 <25 with npm (see `.nvmrc`).
 - .NET 8 SDK correspondente à arquitetura do computador de build.
 - Internet access for the first dependency restore.
 

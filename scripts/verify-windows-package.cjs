@@ -109,6 +109,7 @@ async function main() {
   assert.match(updateMetadata, /sha512:/);
   requireFile(unpackedExecutable, 1 * 1024 * 1024);
   requireFile(path.join(unpackedResources, 'app.asar'), 1 * 1024 * 1024);
+  requireFile(path.join(unpackedFiles, 'electron', 'dataWorker.cjs'));
   assert.equal(JSON.parse(fs.readFileSync(path.join(nativeRuntime, 'runtime.json'), 'utf8')).runtime, 'win-x64');
   requireFile(dpapiExecutable, 10 * 1024 * 1024);
   requireFile(proxyExecutable, 100 * 1024);

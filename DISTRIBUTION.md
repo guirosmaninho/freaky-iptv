@@ -28,11 +28,11 @@ npm run package:win
 ## Requisitos do computador de build
 
 - Windows x64.
-- Node.js 22 e npm.
+- Node.js >=24.15 <25 e npm (ver `.nvmrc`).
 - .NET 8 SDK x64.
 - Acesso à Internet na primeira instalação/build para restaurar pacotes npm, NuGet e ferramentas do electron-builder.
 
-Para macOS, o computador de build precisa de macOS, Node.js 22, .NET 8 SDK e as ferramentas de linha de comandos do Xcode. O pipeline prepara também o FFmpeg correspondente a cada arquitetura, incluindo quando os dois destinos são compilados no mesmo Mac. Os comandos abaixo produzem um DMG nativo para cada arquitetura:
+Para macOS, o computador de build precisa de macOS, Node.js >=24.15 <25, .NET 8 SDK e as ferramentas de linha de comandos do Xcode. O pipeline prepara também o FFmpeg correspondente a cada arquitetura, incluindo quando os dois destinos são compilados no mesmo Mac. Os comandos abaixo produzem um DMG e um ZIP com a app para cada arquitetura:
 
 ```sh
 npm run release:mac
@@ -47,7 +47,8 @@ npm run package:mac
 Os artefactos ficam em `release/`:
 
 - `Freaky-IPTV-<versão>-mac-x64.dmg` para Macs Intel;
-- `Freaky-IPTV-<versão>-mac-arm64.dmg` para Macs Apple Silicon.
+- `Freaky-IPTV-<versão>-mac-arm64.dmg` para Macs Apple Silicon;
+- `Freaky-IPTV-<versão>-mac-x64.zip` e `Freaky-IPTV-<versão>-mac-arm64.zip`: app sem instalação, para extrair e abrir. Os dados continuam na pasta normal de suporte da aplicação.
 
 Os DMGs macOS não são assinados nem notarizados, porque o projeto não usa uma Apple Developer account. Depois de copiar a app para Applications e tentar abri-la, o utilizador deve abrir **Definições do Sistema → Privacidade e Segurança** e selecionar **Abrir mesmo assim**. Este passo pode ser repetido para uma nova versão descarregada. Consulte as [instruções da Apple](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/26/mac/26).
 

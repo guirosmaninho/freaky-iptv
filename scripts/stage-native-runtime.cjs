@@ -18,6 +18,6 @@ if (!fs.existsSync(source)) {
 }
 
 fs.rmSync(destination, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 });
-fs.cpSync(source, destination, { recursive: true, preserveTimestamps: true });
+fs.cpSync(source, destination, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true });
 fs.writeFileSync(path.join(destination, 'runtime.json'), `${JSON.stringify({ runtime }, null, 2)}\n`, 'utf8');
 console.log(`Staged ${runtime} native runtime for packaging.`);

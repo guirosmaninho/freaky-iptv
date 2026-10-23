@@ -1,3 +1,4 @@
+import { useI18n } from '../hooks/useI18n';
 import React, { memo, useState } from 'react';
 
 interface SidebarProps {
@@ -104,6 +105,7 @@ const SidebarComponent: React.FC<SidebarProps> = ({
   onToggleCollapse,
   showYearReview
 }) => {
+  const { t } = useI18n();
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   return (
@@ -146,7 +148,7 @@ const SidebarComponent: React.FC<SidebarProps> = ({
           >
             <img 
               src={`${import.meta.env.BASE_URL}cat_icon.png`}
-              alt="Freaky Logo"
+              alt={t("Freaky Logo")}
               decoding="async"
               style={{
                 width: '28px',
@@ -171,8 +173,8 @@ const SidebarComponent: React.FC<SidebarProps> = ({
         <button
           className={`sidebar-toggle-button ${isCollapsed ? 'is-collapsed' : ''}`}
           onClick={onToggleCollapse}
-          title={isCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-          aria-label={isCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+          title={t(isCollapsed ? 'Show sidebar' : 'Hide sidebar')}
+          aria-label={t(isCollapsed ? 'Show sidebar' : 'Hide sidebar')}
           aria-expanded={!isCollapsed}
           aria-controls="primary-navigation"
           style={{
@@ -208,7 +210,7 @@ const SidebarComponent: React.FC<SidebarProps> = ({
       {/* Nav List */}
       <nav
         id="primary-navigation"
-        aria-label="Primary navigation"
+        aria-label={t("Primary navigation")}
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -256,9 +258,9 @@ const SidebarComponent: React.FC<SidebarProps> = ({
                 type="button"
                 className={item.id === 'YearReview' ? 'sidebar-year-review--highlighted' : undefined}
                 onClick={() => onNavigate(item.id)}
-                aria-label={item.label}
+                aria-label={t(item.label)}
                 aria-current={isActive ? 'page' : undefined}
-                title={isCollapsed ? item.label : undefined}
+                title={isCollapsed ? t(item.label) : undefined}
                 onMouseEnter={() => setHoveredId(item.id)}
                 onMouseLeave={() => setHoveredId(null)}
                 style={{
@@ -269,7 +271,7 @@ const SidebarComponent: React.FC<SidebarProps> = ({
                   height: '36px',
                   borderRadius: '8px',
                   background: (!isActive && isHovered) ? 'rgba(255, 255, 255, 0.055)' : 'transparent',
-                  color: isActive ? '#FFFFFF' : 'var(--text-secondary)',
+                  color: isActive ? 'var(--ui-text-primary)' : 'var(--text-secondary)',
                   fontWeight: isActive ? 600 : 500,
                   fontSize: '13px',
                   fontFamily: 'inherit',
@@ -284,12 +286,12 @@ const SidebarComponent: React.FC<SidebarProps> = ({
                   zIndex: 3
                 }}
               >
-                <span aria-hidden="true" style={{ display: 'flex', alignItems: 'center', minWidth: '18px', color: isActive ? '#FFFFFF' : 'currentColor' }}>
+                <span aria-hidden="true" style={{ display: 'flex', alignItems: 'center', minWidth: '18px', color: isActive ? 'var(--ui-text-primary)' : 'currentColor' }}>
                   {item.icon}
                 </span>
                 {!isCollapsed && (
                   <span style={{ whiteSpace: 'nowrap' }}>
-                    {item.label}
+                    {t(item.label)}
                   </span>
                 )}
               </button>
@@ -303,15 +305,15 @@ const SidebarComponent: React.FC<SidebarProps> = ({
           type="button"
           className={`sidebar-footer-button ${activeSection === 'Settings' ? 'is-active' : ''}`}
           onClick={() => onNavigate('Settings')}
-          aria-label="Settings"
+          aria-label={t("Settings")}
           aria-current={activeSection === 'Settings' ? 'page' : undefined}
-          title={isCollapsed ? 'Settings' : undefined}
+          title={isCollapsed ? t('Settings') : undefined}
         >
           <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
-          {!isCollapsed && <span>Settings</span>}
+          {!isCollapsed && <span>{t("Settings")}</span>}
         </button>
       </div>
     </aside>

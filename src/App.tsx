@@ -1,18 +1,15 @@
+import { useI18n } from './hooks/useI18n';
+import { setAppLanguage } from './services/i18n';
 import React, { lazy, startTransition, Suspense, useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { HomeTab } from './components/HomeTab';
-import { LiveGrid } from './components/LiveGrid';
-import { TvGuideTab } from './components/TvGuideTab';
-import { SettingsTab, type SettingsSavePayload } from './components/SettingsTab';
-import { AboutTab } from './components/AboutTab';
-import { RecordingsTab } from './components/RecordingsTab';
+import type { SettingsSavePayload } from './components/SettingsTab';
 import type { AvailableReview, Channel, EPGProgram, EpgGuide, AppSettings, WatchSession, CacheSnapshot, StorageInfo, PlaybackSessionEvent, UiTheme, AppLanguage, Reminder } from './types';
 import { downloadAndParseM3U } from './services/m3uParser';
-import { downloadAndParseEPG } from './services/epgParser';
+import { downloadAndParseEPG } from './services/epgDownload';
 import { computeStats } from './services/statsCalculator';
 import type { ComputedStats } from './services/statsCalculator';
-import { EMPTY_CHANNEL_EPG_INFO, getEpgInfoFromPrograms } from './services/epgSchedule';
-import type { ChannelEpgInfo } from './services/epgSchedule';
+import { EMPTY_CHANNEL_EPG_INFO, getEpgInfoFromPrograms, createChannelEpgReader } from './services/epgSchedule';
 import { sha256Short, getChannelBaseName, getChannelBaseNamePreserveCase, getChannelQualityLabel, getQualityScore, normalizeKey } from './services/utils';
 import { DEFAULT_APP_BEHAVIOUR, DEFAULT_QUALITY_MAPPINGS, normalizeQualityMappings, validateSourceUrl } from './services/settingsValidation';
 import { getRelativeChannelIndex, isEditableShortcutTarget, nextVolume } from './services/channelNavigation';
@@ -39,6 +36,11 @@ type RefreshSourcesInternal = (
 
 const EMPTY_UPCOMING: EPGProgram[] = [];
 
+const LiveGrid = lazy(() => import('./components/LiveGrid').then(module => ({ default: module.LiveGrid })));
+const TvGuideTab = lazy(() => import('./components/TvGuideTab').then(module => ({ default: module.TvGuideTab })));
+const AboutTab = lazy(() => import('./components/AboutTab').then(module => ({ default: module.AboutTab })));
+const RecordingsTab = lazy(() => import('./components/RecordingsTab').then(module => ({ default: module.RecordingsTab })));
+const SettingsTab = lazy(() => import('./components/SettingsTab').then(module => ({ default: module.SettingsTab })));
 const VideoPlayer = lazy(() => import('./components/VideoPlayer').then(module => ({
   default: module.VideoPlayer
 })));
@@ -249,6 +251,7 @@ const ensureIpcSuccess = (result: boolean, message: string) => {
 };
 
 export const App: React.FC = () => {
+  const { t, locale } = useI18n();
   // Navigation & UI States
   const [activeSection, setActiveSection] = useState('Home');
   const [settingsDirty, setSettingsDirty] = useState(false);
@@ -277,6 +280,7 @@ export const App: React.FC = () => {
   const [discordShowArtwork, setDiscordShowArtwork] = useState(true);
   const [discordClientId, setDiscordClientId] = useState('1514411481259577364');
   
+
   // Channels and EPG guide data
   const [channels, setChannels] = useState<Channel[]>([]);
   const [categories, setCategories] = useState<string[]>(['All channels']);
@@ -298,6 +302,7 @@ export const App: React.FC = () => {
   const [watchHistory, setWatchHistory] = useState<WatchSession[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [stats, setStats] = useState<ComputedStats | null>(null);
+  const [statsError, setStatsError] = useState('');
   const [epgTickMs, setEpgTickMs] = useState(() => Date.now());
   const [reviewClockMs, setReviewClockMs] = useState(() => Date.now());
   const [openedReviewIds, setOpenedReviewIds] = useState<string[]>([]);
@@ -313,6 +318,8 @@ export const App: React.FC = () => {
     return importNotice || 'Ready';
   });
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
+
+  useEffect(() => { void setAppLanguage(language).catch(() => setStatusText('Unable to load the application language.')); document.documentElement.lang = locale; }, [language, locale]);
 
   // Active watch session tracker ref
   const activeSessionRef = useRef<WatchSession | null>(null);
@@ -388,9 +395,10 @@ export const App: React.FC = () => {
     return list;
   }, [playableChannelIndex, recentChannelIds]);
 
-  const getChannelEpgInfo = useCallback((channel: Channel): ChannelEpgInfo => {
-    return getEpgInfoFromPrograms(channelProgramLookup.get(channel.id), epgTickMs);
-  }, [channelProgramLookup, epgTickMs]);
+  const getChannelEpgInfo = useMemo(
+    () => createChannelEpgReader(channelProgramLookup, epgTickMs),
+    [channelProgramLookup, epgTickMs]
+  );
 
   const activeChannelEpgInfo = useMemo(
     () => activeChannel ? getChannelEpgInfo(activeChannel) : EMPTY_CHANNEL_EPG_INFO,
@@ -399,17 +407,18 @@ export const App: React.FC = () => {
 
   const homeGreetingContext = useMemo<HomeGreetingContext>(() => ({
     now: new Date(epgTickMs),
+    locale,
     channels,
     recentChannelIds,
     favoriteChannelIds,
     watchHistory,
     qualityMappings,
     getCurrentProgram: channel => getChannelEpgInfo(channel).program
-  }), [channels, epgTickMs, favoriteChannelIds, getChannelEpgInfo, qualityMappings, recentChannelIds, watchHistory]);
+  }), [channels, epgTickMs, favoriteChannelIds, getChannelEpgInfo, qualityMappings, recentChannelIds, watchHistory, locale]);
 
   const homeGreeting = useMemo(
-    () => homeGreetingSelection ? resolveHomeGreeting(homeGreetingSelection, homeGreetingContext) : null,
-    [homeGreetingContext, homeGreetingSelection]
+    () => activeSection === 'Home' && homeGreetingSelection ? resolveHomeGreeting(homeGreetingSelection, homeGreetingContext) : null,
+    [activeSection, homeGreetingContext, homeGreetingSelection]
   );
 
   useEffect(() => {
@@ -463,7 +472,8 @@ export const App: React.FC = () => {
 
   const availableReviews = useMemo(
     () => computeAvailableReviews(watchHistory, new Date(reviewClockMs), qualityMappings),
-    [qualityMappings, reviewClockMs, watchHistory]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Review dates follow the shared language preference.
+    [qualityMappings, reviewClockMs, watchHistory, locale]
   );
   const displayedReview = useMemo(
     () => getDisplayReview(availableReviews, dismissedReviewIds),
@@ -498,7 +508,13 @@ export const App: React.FC = () => {
       };
       try {
         // A. Load Settings
-        const settings: AppSettings = await window.electron.loadSettings();
+        const [settings, cache, history, loadedReminders] = await Promise.all([
+          window.electron.loadSettings(),
+          window.electron.loadCache(),
+          window.electron.loadHistory(),
+          window.electron.loadReminders()
+        ]);
+        await setAppLanguage(settings.language || 'system');
         setPlaylistUrl(settings.playlistUrl || '');
         setEpgUrl(settings.epgUrl || '');
         setVolume(settings.volume !== undefined ? settings.volume : 80);
@@ -529,7 +545,6 @@ export const App: React.FC = () => {
         setDiscordClientId(settings.discordClientId || '1514411481259577364');
 
         // B. Load Cache
-        const cache: CacheSnapshot | null = await window.electron.loadCache();
         let cacheValid = false;
         let shouldRefresh = true;
         
@@ -578,15 +593,13 @@ export const App: React.FC = () => {
           setCacheStatusText('No valid cache matching current settings found.');
         }
 
-        // C. Load History & Compute Stats
-        const history: WatchSession[] = await window.electron.loadHistory();
-        setReminders(await window.electron.loadReminders());
+        // C. Retain history; dashboard statistics are computed when opened.
+        setReminders(loadedReminders);
         const retainedHistory = pruneWatchHistory(history, loadedHistoryRetentionDays);
         if (retainedHistory.length !== history.length) {
           ensureIpcSuccess(await window.electron.saveHistory(retainedHistory), 'Failed to save pruned history.');
         }
         setWatchHistory(retainedHistory);
-        setStats(computeStats(retainedHistory, { qualityMappings: mappings }));
 
         const greetingNow = new Date();
         const greetingContext: HomeGreetingContext = {
@@ -610,7 +623,7 @@ export const App: React.FC = () => {
         greetingWasSelected = true;
 
         setStatusText(cacheValid ? 'Ready (Loaded from cache)' : 'Ready');
-        await refreshStorageInfo();
+        void refreshStorageInfo();
 
         // D. Trigger Background Refresh
         if (settings.playlistUrl && shouldRefresh) {
@@ -678,7 +691,7 @@ export const App: React.FC = () => {
 
   const handleNavigate = useCallback((section: string) => {
     if (activeSection === 'Settings' && section !== 'Settings' && settingsDirty) {
-      if (!window.confirm('Discard unsaved settings changes?')) return;
+      if (!window.confirm(t('Discard unsaved settings changes?'))) return;
       const resolved = appearance === 'system'
         ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
         : appearance;
@@ -690,7 +703,7 @@ export const App: React.FC = () => {
     startTransition(() => {
       setActiveSection(current => current === section ? current : section);
     });
-  }, [activeSection, appearance, settingsDirty]);
+  }, [activeSection, appearance, settingsDirty, t]);
 
   const handleToggleSidebar = useCallback(() => {
     setIsSidebarCollapsed(current => !current);
@@ -981,16 +994,28 @@ export const App: React.FC = () => {
 
     setStatusText('Testing playlist source...');
     const playlist = await downloadAndParseM3U(targetPlaylistUrl, (message) => setStatusText(message));
-    let programmeCount = 0;
-
-    if (targetEpgUrl.trim()) {
-      setStatusText('Testing guide source...');
-      const guide = await downloadAndParseEPG(targetEpgUrl, (message) => setStatusText(message));
-      programmeCount = countEpgPrograms(guide.programsByChannel);
+    const playlistMessage = t('Playlist connected: {count} channels.', { count: playlist.channels.length.toLocaleString() });
+    if (!targetEpgUrl.trim()) {
+      setStatusText('Source test complete.');
+      return playlistMessage;
     }
 
-    setStatusText('Source test complete.');
-    return `Source test passed. ${playlist.channels.length.toLocaleString()} channels parsed, ${programmeCount.toLocaleString()} programmes parsed.`;
+    setStatusText('Testing guide source...');
+    try {
+      const guide = await downloadAndParseEPG(targetEpgUrl, (message) => setStatusText(message));
+      const programmeCount = countEpgPrograms(guide.programsByChannel);
+      if (programmeCount === 0) throw new Error('XML parsing error: no valid programmes');
+      setStatusText('Source test complete.');
+      return t('Sources connected: {channels} channels, {programmes} programmes.', {
+        channels: playlist.channels.length.toLocaleString(), programmes: programmeCount.toLocaleString()
+      });
+    } catch (error) {
+      setStatusText('Source test complete.');
+      const guideMessage = error instanceof Error && error.message.startsWith('XML parsing error:')
+        ? t('The TV guide source returned invalid XMLTV.')
+        : t('The TV guide could not be downloaded.');
+      throw new Error(`${playlistMessage} ${guideMessage}`, { cause: error });
+    }
   };
 
   const handleClearCache = async () => {
@@ -1180,29 +1205,31 @@ export const App: React.FC = () => {
   // duplicated rows).
   const sessionFinalizeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const endCurrentSession = useCallback(async () => {
+    // Detach before queuing persistence: playChannel can install a new session
+    // in the same turn, before this queue starts running.
+    const session = activeSessionRef.current;
+    if (!session) return sessionFinalizeQueueRef.current;
+
+    session.endTimeUtc = new Date().toISOString();
+    const endMs = new Date(session.endTimeUtc).getTime();
+    const playbackStartMs = session.playbackStartedAtUtc
+      ? new Date(session.playbackStartedAtUtc).getTime()
+      : NaN;
+    const durationMs = Number.isFinite(playbackStartMs) ? Math.max(0, endMs - playbackStartMs) : 0;
+    session.playingDurationMs = durationMs;
+
+    if (lastBufferingStartedAtMsRef.current !== null && Number.isFinite(endMs)) {
+      const stallMs = Math.max(0, endMs - lastBufferingStartedAtMsRef.current);
+      session.stallDurationMs = (session.stallDurationMs || 0) + stallMs;
+      session.bufferingDurationMs = (session.bufferingDurationMs || 0) + stallMs;
+      lastBufferingStartedAtMsRef.current = null;
+    }
+
+    // Apply a five-second filter to avoid noise in stats
+    const completedSession = { ...session };
+    activeSessionRef.current = null;
+
     const run = sessionFinalizeQueueRef.current.then(async () => {
-      const session = activeSessionRef.current;
-      if (!session) return;
-
-      session.endTimeUtc = new Date().toISOString();
-      const endMs = new Date(session.endTimeUtc).getTime();
-      const playbackStartMs = session.playbackStartedAtUtc
-        ? new Date(session.playbackStartedAtUtc).getTime()
-        : NaN;
-      const durationMs = Number.isFinite(playbackStartMs) ? Math.max(0, endMs - playbackStartMs) : 0;
-      session.playingDurationMs = durationMs;
-
-      if (lastBufferingStartedAtMsRef.current !== null && Number.isFinite(endMs)) {
-        const stallMs = Math.max(0, endMs - lastBufferingStartedAtMsRef.current);
-        session.stallDurationMs = (session.stallDurationMs || 0) + stallMs;
-        session.bufferingDurationMs = (session.bufferingDurationMs || 0) + stallMs;
-        lastBufferingStartedAtMsRef.current = null;
-      }
-
-      // Apply a five-second filter to avoid noise in stats
-      const completedSession = { ...session };
-      activeSessionRef.current = null;
-
       if (durationMs >= 5000) {
         const appendedHistory = [...watchHistoryRef.current, completedSession];
         const updatedHistory = pruneWatchHistory(appendedHistory, historyRetentionDays);
@@ -1228,6 +1255,10 @@ export const App: React.FC = () => {
   }, [endCurrentSession]);
 
   useEffect(() => window.electron.onAppBeforeClose(() => {
+    if (settingsDirty && !window.confirm(t('Discard unsaved settings changes?'))) {
+      window.electron.cancelAppClose();
+      return;
+    }
     void (async () => {
       try {
         await finishActiveRecording();
@@ -1237,7 +1268,7 @@ export const App: React.FC = () => {
         window.electron.confirmAppClose();
       }
     })();
-  }), [flushPendingVolumeSave]);
+  }), [flushPendingVolumeSave, settingsDirty, t]);
 
   const handleRecordSessionBytes = useCallback((
     sessionId: string,
@@ -1342,20 +1373,27 @@ export const App: React.FC = () => {
   }, [effectiveActiveSection, handleNextChannel, handlePrevChannel, handleVolumeChange, volume]);
 
   const handleRefreshStats = useCallback(async () => {
-    const history: WatchSession[] = await window.electron.loadHistory();
-    const retainedHistory = pruneWatchHistory(history, historyRetentionDays);
-    const mergedHistory = [...retainedHistory];
-    if (activeSessionRef.current) {
-      const currentActive = {
-        ...activeSessionRef.current,
-        endTimeUtc: new Date().toISOString()
-      };
-      mergedHistory.push(currentActive);
+    setStatsError('');
+    try {
+      const history: WatchSession[] = await window.electron.loadHistory();
+      const retainedHistory = pruneWatchHistory(history, historyRetentionDays);
+      const mergedHistory = [...retainedHistory];
+      if (activeSessionRef.current) {
+        const currentActive = {
+          ...activeSessionRef.current,
+          endTimeUtc: new Date().toISOString()
+        };
+        mergedHistory.push(currentActive);
+      }
+      watchHistoryRef.current = retainedHistory;
+      setWatchHistory(retainedHistory);
+      setStats(computeStats(mergedHistory, { qualityMappings }));
+    } catch (error) {
+      setStatsError('Unable to load statistics.');
+      throw error;
     }
-    watchHistoryRef.current = retainedHistory;
-    setWatchHistory(retainedHistory);
-    setStats(computeStats(mergedHistory, { qualityMappings }));
-  }, [historyRetentionDays, qualityMappings]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- Date labels follow the shared locale.
+  }, [historyRetentionDays, qualityMappings, locale]);
 
   const handleCopyStatsCard = useCallback(async (png: Uint8Array) => {
     const result = await window.electron.copyStatisticsCard({ pngBytes: png });
@@ -1404,7 +1442,7 @@ export const App: React.FC = () => {
     switch (effectiveActiveSection) {
       case 'Live':
         return (
-          <LiveGrid
+          <LiveGrid key="live" onNavigate={handleNavigate}
             channels={channels}
             categories={categories}
             activeChannel={activeChannel}
@@ -1417,7 +1455,7 @@ export const App: React.FC = () => {
         );
       case 'Favorites':
         return (
-          <LiveGrid
+          <LiveGrid key="favorites" onNavigate={handleNavigate}
             channels={channels}
             categories={categories}
             activeChannel={activeChannel}
@@ -1432,6 +1470,7 @@ export const App: React.FC = () => {
       case 'Guide':
         return (
           <TvGuideTab
+            onNavigate={handleNavigate}
             channels={channels}
             onPlayChannel={playChannel}
             getChannelEpgInfo={getChannelEpgInfo}
@@ -1441,7 +1480,7 @@ export const App: React.FC = () => {
         );
       case 'Stats':
         return stats ? (
-          <Suspense fallback={<div role="status" aria-live="polite" className="app-loading-state">Loading stats dashboard...</div>}>
+          <Suspense fallback={<div role="status" aria-live="polite" className="app-loading-state">{t('Loading stats dashboard...')}</div>}>
             <StatsTab
               stats={stats}
               onRefreshStats={handleRefreshStats}
@@ -1449,16 +1488,19 @@ export const App: React.FC = () => {
               onSaveStatsCard={handleSaveStatsCard}
             />
           </Suspense>
-        ) : (
-          <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-secondary)' }}>
-            Loading stats dashboard...
+        ) : statsError ? (
+          <div className="app-loading-state" role="alert">
+            <span>{t(statsError)}</span>
+            <button className="btn-secondary" onClick={() => void handleRefreshStats().catch(() => {})}>{t('Retry')}</button>
           </div>
+        ) : (
+          <div role="status" aria-live="polite" className="app-loading-state">{t('Loading stats dashboard...')}</div>
         );
       case 'Recordings':
-        return <RecordingsTab />;
+        return <RecordingsTab onBrowseChannels={() => handleNavigate('Live')} />;
       case 'YearReview':
         return annualReview?.annualData ? (
-          <Suspense fallback={<div role="status" aria-live="polite" className="app-loading-state">Loading year review...</div>}>
+          <Suspense fallback={<div role="status" aria-live="polite" className="app-loading-state">{t('Loading year review...')}</div>}>
             <AnnualReview data={annualReview.annualData} onExit={() => handleNavigate('Home')} />
           </Suspense>
         ) : null;
@@ -1483,7 +1525,7 @@ export const App: React.FC = () => {
             initialRecordingDirectory={recordingDirectory}
             cacheStatus={cacheStatusText}
             guideStatus={guideStatusText}
-            statusText={statusText}
+            statusText={t(statusText)}
             isLoading={isLoading}
             storageInfo={storageInfo}
             favoritesCount={favoritesCount}
@@ -1503,6 +1545,8 @@ export const App: React.FC = () => {
       default:
         return (
           <HomeTab
+            channels={channels}
+            hasPlaylist={Boolean(playlistUrl.trim())}
             greeting={homeGreeting}
             recentChannels={recentChannels}
             activeChannel={activeChannel}
@@ -1522,7 +1566,7 @@ export const App: React.FC = () => {
     }
   };
 
-  const sectionTitle = effectiveActiveSection === 'Home' ? 'Home' : effectiveActiveSection === 'YearReview' ? 'Year Review' : effectiveActiveSection;
+  const sectionTitle = effectiveActiveSection === 'Home' ? 'Home' : effectiveActiveSection === 'YearReview' ? 'Year Review' : effectiveActiveSection === 'Live' ? 'Live TV' : effectiveActiveSection === 'Guide' ? 'TV Guide' : effectiveActiveSection === 'Stats' ? 'Statistics' : effectiveActiveSection;
   const hasStatusError = /failed|error|invalid|could not|unavailable/i.test(statusText);
 
   return (
@@ -1559,10 +1603,10 @@ export const App: React.FC = () => {
           position: 'relative'
         }}
       >
-        <h1 id="active-section-title" className="sr-only">{sectionTitle}</h1>
+        <h1 id="active-section-title" className="sr-only">{t(sectionTitle)}</h1>
         {hasStatusError && (
           <div className="app-status-alert" role="alert">
-            {statusText}
+            {t(statusText)}
           </div>
         )}
         {zapPreview && (
@@ -1595,11 +1639,13 @@ export const App: React.FC = () => {
                 <path d="M4 12a8 8 0 0 1 8-8" />
               </svg>
               <span style={{ fontSize: '14px', color: 'var(--text-secondary)', fontWeight: 500 }}>
-                Loading cache database...
+                {t('Loading cache database...')}
               </span>
             </div>
           ) : (
-            renderActiveSection()
+            <Suspense fallback={<div role="status" className="app-loading-state">{t('Loading…')}</div>}>
+              {renderActiveSection()}
+            </Suspense>
           )}
         </div>
 

@@ -1,3 +1,4 @@
+import { useI18n } from '../hooks/useI18n';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPlaybackSessionReporter } from '../services/playbackSessionReporter';
 import { classifyPlaybackFailure, playbackFailureMessage, redactPlaybackDiagnostic } from '../services/playbackFailure';
@@ -120,6 +121,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   qualityMappings,
   onPlaybackEvent
 }) => {
+  const { t } = useI18n();
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<HlsPlayer | null>(null);
   const mpegtsRef = useRef<MpegTsPlayer | null>(null);
@@ -1555,10 +1557,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <button
           onClick={() => setIsQualityOpen(!isQualityOpen)}
           className={`player-ghost-button player-quality-button ${isQualityOpen ? 'is-active' : ''}`}
-          title="Choose stream quality"
+          title={t("Choose stream quality")}
           aria-haspopup="menu"
           aria-expanded={isQualityOpen}
-          aria-label={`Choose stream quality. Current quality: ${currentQuality}`}
+          aria-label={t('Choose stream quality. Current quality: {quality}', { quality: currentQuality })}
         >
           <span className="player-quality-current">{currentQuality}</span>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -1571,9 +1573,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {isQualityOpen && (
           <>
             <div className="player-quality-dismiss" onClick={() => setIsQualityOpen(false)} />
-            <div className={`player-quality-popover player-quality-popover--${mode}`} role="menu" aria-label="Stream quality">
+            <div className={`player-quality-popover player-quality-popover--${mode}`} role="menu" aria-label={t("Stream quality")}>
               <div className="player-quality-title">
-                Quality
+                {t("Quality")}
               </div>
               {channel.variants.map((variant) => {
                 const quality = getChannelQualityLabel(variant.name, qualityMappings);
@@ -1676,7 +1678,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const renderMediaActions = (size: number) => (
     <>
-      <button onClick={captureFrame} className="player-ghost-button player-capture-button" title="Take screenshot" aria-label="Take screenshot">
+      <button onClick={captureFrame} className="player-ghost-button player-capture-button" title={t("Take screenshot")} aria-label={t("Take screenshot")}>
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
           <path d="M5 7h3l2-2h4l2 2h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z" />
           <circle cx="12" cy="13" r="3.5" />
@@ -1685,14 +1687,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       <button
         onClick={toggleRecording}
         className={`player-ghost-button player-record-button ${recordingState.status === 'recording' ? 'is-recording' : ''}`}
-        title={recordingState.status === 'recording' ? 'Stop recording' : 'Record source as MKV'}
-        aria-label={recordingState.status === 'recording' ? 'Stop recording' : 'Start recording'}
+        title={t(recordingState.status === 'recording' ? 'Stop recording' : 'Record source as MKV')}
+        aria-label={t(recordingState.status === 'recording' ? 'Stop recording' : 'Start recording')}
       >
         <span className="player-record-dot" />
       </button>
       {(recordingState.status === 'recording' || recordingState.status === 'finalizing') && (
         <span className="player-recording-status" role="status">
-          {recordingState.status === 'finalizing' ? 'Finalizing' : formatRecordingDuration(recordingState.startedAtUtc, recordingClock)}
+          {recordingState.status === 'finalizing' ? t('Finalizing') : formatRecordingDuration(recordingState.startedAtUtc, recordingClock)}
           {' · '}{formatRecordingBytes(recordingState.bytes)}
         </span>
       )}
@@ -1718,7 +1720,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         preload="auto"
         className={`player-video ${isImmersive ? 'player-video--immersive' : 'player-video--compact'}`}
         tabIndex={0}
-        aria-label={`${channel.name} live video`}
+        aria-label={t('{channel} live video', { channel: channel.name })}
         onClick={isImmersive ? revealImmersiveControls : toggleExpanded}
         onKeyDown={(event) => {
           if (event.key !== ' ' && event.key !== 'Enter') return;
@@ -1734,8 +1736,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           type="button"
           className="player-preview-spacer"
           onClick={toggleExpanded}
-          title="Expand player inside app"
-          aria-label={`Expand ${channel.name} player`}
+          title={t("Expand player inside app")}
+          aria-label={t('Expand {channel} player', { channel: channel.name })}
         />
       )}
 
@@ -1763,11 +1765,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <div 
           className={`player-stats-panel ${!isImmersive ? 'player-stats-panel--compact' : ''}`}
           role="region"
-          aria-label="Playback statistics"
+          aria-label={t("Playback statistics")}
         >
           <div className="player-stats-header">
-            <span>PLAYBACK STATISTICS</span>
-            <button onClick={() => setShowStats(false)} aria-label="Close playback statistics">
+            <span>{t("PLAYBACK STATISTICS")}</span>
+            <button onClick={() => setShowStats(false)} aria-label={t("Close playback statistics")}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <line x1="18" y1="6" x2="6" y2="18" />
                 <line x1="6" y1="6" x2="18" y2="18" />
@@ -1775,23 +1777,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </button>
           </div>
           <div className="player-stats-details">
-            <span>Viewport / Frames</span><strong>{stats.resolution} · {stats.fps} · {stats.droppedFrames} dropped</strong>
-            <span>Current bitrate</span><strong>{stats.inputBitrate}</strong>
-            <span>Codecs</span><strong>{stats.videoCodec} / {stats.audioCodec}</strong>
-            <span>Transferred</span><strong>{stats.readBytes}</strong>
+            <span>{t("Viewport / Frames")}</span><strong>{stats.resolution} {t("·")} {stats.fps} {t("·")} {stats.droppedFrames} {t("dropped")}</strong>
+            <span>{t("Current bitrate")}</span><strong>{stats.inputBitrate}</strong>
+            <span>{t("Codecs")}</span><strong>{stats.videoCodec} {t("/")} {stats.audioCodec}</strong>
+            <span>{t("Transferred")}</span><strong>{stats.readBytes}</strong>
           </div>
 
           <div className="player-stats-live-metrics">
             <div className="player-stats-meter-row">
-              <span>Connection speed</span>
+              <span>{t("Connection speed")}</span>
               <div className="player-stats-speed-track" aria-hidden="true">
                 <i style={{ width: `${Math.min(100, (stats.connectionSpeedKbps / 25000) * 100)}%` }} />
               </div>
               <strong>{stats.connectionSpeed}</strong>
             </div>
             <div className="player-stats-meter-row">
-              <span>Network activity</span>
-              <div className="player-network-chart" aria-label={`Network activity: ${stats.networkActivity}`}>
+              <span>{t("Network activity")}</span>
+              <div className="player-network-chart" aria-label={t('Network activity: {activity}', { activity: t(stats.networkActivity) })}>
                 {stats.networkHistory.map((sample, index) => (
                   <i key={`${index}-${sample}`} style={{ height: `${Math.max(3, (sample / networkHistoryPeak) * 100)}%` }} />
                 ))}
@@ -1799,11 +1801,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <strong>{stats.networkActivity}</strong>
             </div>
             <div className="player-stats-meter-row">
-              <span>Buffer health</span>
+              <span>{t("Buffer health")}</span>
               <div className="player-buffer-health" aria-hidden="true">
                 <i style={{ width: `${Math.min(100, (stats.bufferHealth / 30) * 100)}%` }} />
               </div>
-              <strong>{stats.bufferHealth.toFixed(1)} s</strong>
+              <strong>{stats.bufferHealth.toFixed(1)} {t("s")}</strong>
             </div>
           </div>
         </div>
@@ -1817,7 +1819,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <div className="hud-controls-inner">
           {/* Left Section: Active Channel Details */}
           <div className="hud-channel">
-            <span className="hud-kicker">NOW PLAYING</span>
             <div className="hud-title-row">
               <h4 className="hud-title">
                 {channel.name}
@@ -1831,7 +1832,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               onClick={onPrevChannel}
               className="player-circle-button"
-              title="Previous channel"
+              title={t("Previous channel")}
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polygon points="19 20 9 12 19 4 19 20" />
@@ -1842,7 +1843,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               onClick={onStop}
               className="player-stop-button"
-              title="Stop playback"
+              title={t("Stop playback")}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                 <rect x="4" y="4" width="16" height="16" rx="2" />
@@ -1852,7 +1853,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               onClick={onNextChannel}
               className="player-circle-button"
-              title="Next channel"
+              title={t("Next channel")}
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polygon points="5 4 15 12 5 20 5 4" />
@@ -1865,7 +1866,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {/* Right Section: Volume & Fullscreen / PIP / HUD Controls */}
           <div className="hud-utilities">
             <div className="player-volume">
-              <button onClick={handleMuteToggle} className="player-ghost-button" title={volume === 0 ? 'Unmute' : 'Mute'}>
+              <button onClick={handleMuteToggle} className="player-ghost-button" title={t(volume === 0 ? 'Unmute' : 'Mute')}>
                 {volume === 0 ? (
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
@@ -1884,7 +1885,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 min="0"
                 max="100"
                 value={volume}
-                aria-label="Playback volume"
+                aria-label={t("Playback volume")}
                 onChange={(e) => onVolumeChange(parseInt(e.target.value))}
                 className="player-range player-range--wide"
                 style={{ '--range-fill': `${volume}%` } as React.CSSProperties}
@@ -1893,7 +1894,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
             {renderMediaActions(15)}
 
-            <button onClick={() => setShowStats(!showStats)} className={`player-ghost-button ${showStats ? 'is-active' : ''}`} title="Playback statistics">
+            <button onClick={() => setShowStats(!showStats)} className={`player-ghost-button ${showStats ? 'is-active' : ''}`} title={t("Playback statistics")}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <line x1="18" y1="20" x2="18" y2="10" />
                 <line x1="12" y1="20" x2="12" y2="4" />
@@ -1901,14 +1902,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </svg>
             </button>
 
-            <button onClick={handlePipToggle} className="player-ghost-button" title="Picture-in-Picture">
+            <button onClick={handlePipToggle} className="player-ghost-button" title={t("Picture-in-Picture")}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <rect x="2" y="4" width="20" height="16" rx="2" ry="2" />
                 <rect x="13" y="11" width="7" height="7" rx="1" />
               </svg>
             </button>
 
-            <button onClick={handleFullscreenToggle} className="player-ghost-button" title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'} disabled={isFullscreenTransitioning} aria-busy={isFullscreenTransitioning}>
+            <button onClick={handleFullscreenToggle} className="player-ghost-button" title={t(isFullscreen ? 'Exit fullscreen' : 'Fullscreen')} disabled={isFullscreenTransitioning} aria-busy={isFullscreenTransitioning}>
               {isFullscreen ? (
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M10 14l-7 7" />
@@ -1920,7 +1921,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               )}
             </button>
 
-            <button onClick={toggleExpanded} className="player-ghost-button" title="Collapse player">
+            <button onClick={toggleExpanded} className="player-ghost-button" title={t("Collapse player")}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polyline points="6 9 12 15 18 9" />
               </svg>
@@ -1940,7 +1941,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 {channel.name}
               </span>
               {renderQualitySelector('compact')}
-              <span className="compact-separator">|</span>
+              <span className="compact-separator">{t("|")}</span>
               <span className="compact-program">
                 {currentProgram ? currentProgram.title : 'No guide programme'}
               </span>
@@ -1952,7 +1953,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   <div className="player-progress-fill" style={{ width: `${currentProgress}%` }} />
                 </div>
                 <span className="compact-time">
-                  {formatTime(currentProgram.startUtc)} - {formatTime(currentProgram.stopUtc)}
+                  {formatTime(currentProgram.startUtc)} {t("-")} {formatTime(currentProgram.stopUtc)}
                 </span>
               </div>
             )}
@@ -1968,7 +1969,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button 
               onClick={onPrevChannel}
               className="player-circle-button player-circle-button--compact"
-              title="Previous channel"
+              title={t("Previous channel")}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polygon points="19 20 9 12 19 4 19 20" />
@@ -1980,7 +1981,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button 
               onClick={onStop}
               className="player-stop-button player-stop-button--compact"
-              title="Stop playback"
+              title={t("Stop playback")}
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
                 <rect x="4" y="4" width="16" height="16" rx="2" />
@@ -1991,7 +1992,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button 
               onClick={onNextChannel}
               className="player-circle-button player-circle-button--compact"
-              title="Next channel"
+              title={t("Next channel")}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polygon points="5 4 15 12 5 20 5 4" />
@@ -2006,7 +2007,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <button 
                 onClick={handleMuteToggle}
                 className="player-ghost-button"
-                title={volume === 0 ? 'Unmute' : 'Mute'}
+                title={t(volume === 0 ? 'Unmute' : 'Mute')}
               >
                 {volume === 0 ? (
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -2026,7 +2027,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 min="0"
                 max="100"
                 value={volume}
-                aria-label="Playback volume"
+                aria-label={t("Playback volume")}
                 onChange={(e) => onVolumeChange(parseInt(e.target.value))}
                 className="player-range player-range--compact"
                 style={{ '--range-fill': `${volume}%` } as React.CSSProperties}
@@ -2037,7 +2038,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button 
               onClick={handlePipToggle}
               className="player-ghost-button"
-              title="Picture-in-Picture"
+              title={t("Picture-in-Picture")}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <rect x="2" y="4" width="20" height="16" rx="2" ry="2" />
@@ -2049,7 +2050,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button 
               onClick={handleFullscreenToggle}
               className="player-ghost-button"
-              title="Fullscreen"
+              title={t("Fullscreen")}
               disabled={isFullscreenTransitioning}
               aria-busy={isFullscreenTransitioning}
             >
@@ -2062,7 +2063,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button 
               onClick={toggleExpanded}
               className="player-ghost-button"
-              title="Expand Player"
+              title={t("Expand Player")}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <polyline points="18 15 12 9 6 15" />
@@ -2074,18 +2075,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {playbackFailure && (
         <div className="player-error-panel" role="alert">
-          <strong>{playbackFailure.message}</strong>
-          <span>{playbackAttempts.length} playback engines tried.</span>
+          <strong>{t(playbackFailure.message)}</strong>
+          <span>{t('{count} playback engines tried.', { count: playbackAttempts.length })}</span>
           <div>
-            <button type="button" onClick={() => setRetryNonce(value => value + 1)}>Retry</button>
-            {(channel.variants?.length || 0) > 1 && <button type="button" onClick={tryAnotherQuality}>Try another quality</button>}
-            <button type="button" onClick={copyDiagnostics}>Copy diagnostics</button>
-            <button type="button" onClick={onNextChannel}>Next channel</button>
+            <button type="button" onClick={() => setRetryNonce(value => value + 1)}>{t("Retry")}</button>
+            {(channel.variants?.length || 0) > 1 && <button type="button" onClick={tryAnotherQuality}>{t("Try another quality")}</button>}
+            <button type="button" onClick={copyDiagnostics}>{t("Copy diagnostics")}</button>
+            <button type="button" onClick={onNextChannel}>{t("Next channel")}</button>
           </div>
         </div>
       )}
 
-      {mediaNotice && <div className="player-media-notice" role="status" aria-live="polite">{mediaNotice}</div>}
+      {mediaNotice && <div className="player-media-notice" role="status" aria-live="polite">{t(mediaNotice)}</div>}
 
       {isPictureInPicture && (
         <div className={`pip-return-prompt ${isImmersive ? 'pip-return-prompt--immersive' : 'pip-return-prompt--compact'}`} role="status" aria-live="polite">
@@ -2093,7 +2094,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             type="button"
             className={`pip-return-button ${isImmersive ? '' : 'pip-return-button--compact'}`}
             onClick={handlePipToggle}
-            title="Return broadcast to app"
+            title={t("Return broadcast to app")}
           >
             <svg aria-hidden="true" width={isImmersive ? "18" : "14"} height={isImmersive ? "18" : "14"} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M9 7H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" />

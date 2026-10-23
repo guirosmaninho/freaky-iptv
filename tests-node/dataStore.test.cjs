@@ -5,7 +5,7 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { afterEach, describe, it } = require('node:test');
 
-const { createDataStore } = require('../electron/dataStore.cjs');
+const { createDataStore, resolveWorkerPath } = require('../electron/dataStore.cjs');
 
 const roots = [];
 const stores = [];
@@ -117,4 +117,10 @@ describe('SQLite data store', () => {
 
     assert.deepEqual(await store.loadHistory(), [first, second]);
   });
+});
+
+it('resolves the SQLite worker outside ASAR without changing ordinary development paths', () => {
+  assert.equal(resolveWorkerPath('/Applications/Freaky IPTV.app/Contents/Resources/app.asar/electron'),
+    '/Applications/Freaky IPTV.app/Contents/Resources/app.asar.unpacked/electron/dataWorker.cjs');
+  assert.equal(resolveWorkerPath('/work/electron'), '/work/electron/dataWorker.cjs');
 });

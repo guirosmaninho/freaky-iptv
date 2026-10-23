@@ -30,6 +30,7 @@ const { assertWritableDirectory, clampCaptureBounds, createUniqueMediaPath, deco
 const { createPortableReplacementPlan, isSafePortableExecutablePath } = require('./electron/portableUpdate.cjs');
 const { createFileSnapshot, migrateLegacyData, restoreFileSnapshot } = require('./electron/storageCore.cjs');
 const { createDataStore } = require('./electron/dataStore.cjs');
+const { createTaskQueue } = require('./electron/taskQueue.cjs');
 const { openStreamingHttpRequest } = require('./electron/streamingHttpCore.cjs');
 const { compareVersions, isTrustedGithubAssetUrl, isTrustedGithubRedirectUrl, PROJECT_OWNER, PROJECT_REPOSITORY, selectReleaseCandidate } = require('./electron/updateCore.cjs');
 const { getFfmpegProbeArgs, getFfmpegProxyModes, getNativeRuntimeDirectory, getNextFfmpegProxyMode, resolvePlatformDirectories } = require('./electron/platformCore.cjs');
@@ -65,6 +66,7 @@ const MAX_DISCORD_PACKET_BYTES = 1024 * 1024;
 const MAX_DISCORD_ASSET_LENGTH = 256;
 const MAX_PNG_BYTES = 16 * 1024 * 1024;
 const MAX_RECORDING_THUMBNAIL_BYTES = 4 * 1024 * 1024;
+const queueThumbnail = createTaskQueue(2);
 const MAX_UPDATE_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 const PROJECT_URL = 'https://github.com/guirosmaninho/freaky-iptv';
 const NEW_ISSUE_URL = 'https://github.com/guirosmaninho/freaky-iptv/issues/new';
@@ -1597,10 +1599,10 @@ function recordingThumbnailCachePath(entry) {
 function extractRecordingThumbnail(entry) {
   const run = (seekSeconds) => new Promise((resolve, reject) => {
     const process = spawn(resolveFfmpegPath(), [
-      '-hide_banner', '-loglevel', 'error', '-ss', seekSeconds, '-i', entry.absolutePath,
+      '-hide_banner', '-loglevel', 'error', '-filter_threads', '1', '-threads', '1', '-ss', seekSeconds, '-i', entry.absolutePath,
       '-map', '0:v:0?', '-frames:v', '1', '-vf', 'scale=320:-2', '-q:v', '5',
-      '-an', '-sn', '-dn', '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1'
-    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      '-an', '-sn', '-dn', '-threads', '1', '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1'
+    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000, killSignal: 'SIGKILL' });
     const chunks = [];
     let totalBytes = 0;
     let settled = false;
@@ -1620,7 +1622,7 @@ function extractRecordingThumbnail(entry) {
       chunks.push(chunk);
     });
     process.once('error', fail);
-    process.once('exit', code => {
+    process.once('close', code => {
       if (settled) return;
       if (code !== 0) {
         fail(new Error('FFmpeg could not extract a recording thumbnail.'));
@@ -1658,16 +1660,18 @@ async function loadRecordingThumbnail(entry) {
 
   let task = recordingThumbnailTasks.get(cachePath);
   if (!task) {
-    task = extractRecordingThumbnail(entry);
+    task = queueThumbnail(async () => {
+      const image = await extractRecordingThumbnail(entry);
+      await fs.promises.writeFile(cachePath, image, { flag: 'w' });
+      return image;
+    });
     recordingThumbnailTasks.set(cachePath, task);
     const clearTask = () => {
       if (recordingThumbnailTasks.get(cachePath) === task) recordingThumbnailTasks.delete(cachePath);
     };
     task.then(clearTask, clearTask);
   }
-  const image = await task;
-  await fs.promises.writeFile(cachePath, image, { flag: 'w' });
-  return image;
+  return task;
 }
 
 registerTrustedHandle('list-recordings', () => scanRecordings());
@@ -2152,84 +2156,30 @@ async function downloadUrlText(url) {
   return decoded.toString('utf8');
 }
 
-async function requestHttpUrl(urlText, redirectCount = 0) {
-  let parsedUrl;
-  try {
-    parsedUrl = new URL(urlText);
-  } catch {
-    throw new Error('Invalid URL.');
-  }
-  if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new Error('Unsupported URL protocol.');
-
-  // Resolve before connecting and return that exact address from lookup. This
-  // prevents a hostname from being re-resolved to a private address later.
-  const target = await resolveNetworkTarget(parsedUrl.hostname, false);
-  const transport = parsedUrl.protocol === 'https:' ? https : http;
-  const basicAuth = parsedUrl.username
-    ? `Basic ${Buffer.from(`${decodeURIComponent(parsedUrl.username)}:${decodeURIComponent(parsedUrl.password)}`).toString('base64')}`
-    : null;
-
-  return new Promise((resolve, reject) => {
-    const request = transport.request({
-      protocol: parsedUrl.protocol,
-      hostname: parsedUrl.hostname,
-      port: parsedUrl.port || undefined,
-      path: `${parsedUrl.pathname || '/'}${parsedUrl.search || ''}`,
-      method: 'GET',
-      headers: {
-        'User-Agent': 'FreakyIPTV/1.0',
-        Accept: '*/*',
-        ...(basicAuth ? { Authorization: basicAuth } : {})
-      },
-      lookup: (_hostname, options, callback) => {
-        if (typeof options === 'object' && options?.all) {
-          callback(null, [{ address: target.address, family: target.family }]);
-          return;
-        }
-        callback(null, target.address, target.family);
-      }
-    }, response => {
-      const statusCode = response.statusCode || 0;
-      const location = typeof response.headers.location === 'string' ? response.headers.location : undefined;
-      if (statusCode >= 300 && statusCode < 400 && location) {
-        response.resume();
-        if (redirectCount >= MAX_REDIRECTS) {
-          reject(new Error('Too many redirects.'));
-          return;
-        }
-        const nextUrl = new URL(location, parsedUrl);
-        // HTTP credentials are scoped to one origin and must never follow a
-        // cross-origin redirect.
-        if (nextUrl.origin !== parsedUrl.origin) {
-          nextUrl.username = '';
-          nextUrl.password = '';
-        }
-        resolve(requestHttpUrl(nextUrl.toString(), redirectCount + 1));
-        return;
-      }
-
-      const chunks = [];
-      let byteLength = 0;
-      response.on('data', chunk => {
-        byteLength += chunk.length;
-        if (byteLength > MAX_TEXT_DOWNLOAD_BYTES) {
-          request.destroy(new Error('Downloaded response is too large.'));
-          return;
-        }
-        chunks.push(chunk);
-      });
-      response.on('end', () => resolve({
-        statusCode,
-        headers: response.headers,
-        body: Buffer.concat(chunks, byteLength),
-        finalUrl: parsedUrl.toString()
-      }));
-      response.on('error', reject);
-    });
-    request.setTimeout(60_000, () => request.destroy(new Error('Timed out downloading URL.')));
-    request.on('error', reject);
-    request.end();
+async function requestHttpUrl(urlText) {
+  const response = await openStreamingHttpRequest(urlText, {
+    allowPrivateNetwork: false,
+    maxRedirects: MAX_REDIRECTS,
+    resolveTarget: resolveNetworkTarget,
+    timeoutMs: 60_000,
+    userAgent: 'FreakyIPTV/1.0'
   });
+  const chunks = [];
+  let byteLength = 0;
+  for await (const chunk of response) {
+    byteLength += chunk.length;
+    if (byteLength > MAX_TEXT_DOWNLOAD_BYTES) {
+      response.destroy();
+      throw new Error('Downloaded response is too large.');
+    }
+    chunks.push(chunk);
+  }
+  return {
+    statusCode: response.statusCode || 0,
+    headers: response.headers,
+    body: Buffer.concat(chunks, byteLength),
+    finalUrl: response.finalUrl
+  };
 }
 
 registerTrustedHandle('download-url-text', async (event, url) => {
@@ -3145,16 +3095,51 @@ registerTrustedHandle('get-proxy-traffic', () => {
 let mainWindow = null;
 let keepPlaybackAwakeBlockerId = null;
 let mainWindowCloseConfirmed = false;
+let mainWindowCloseApproved = false;
 let mainWindowCloseTimer = null;
+let appQuitRequested = false;
+let appQuitReady = false;
+let appQuitPreparation = null;
 
-registerTrustedOn('app-close-ready', () => {
+function prepareAppQuit() {
+  if (appQuitPreparation) return appQuitPreparation;
+  appQuitPreparation = (async () => {
+    try {
+      await stopSourceRecording();
+      await dataStore.close();
+    } catch {
+      console.error('Failed to finish local shutdown cleanup.');
+    } finally {
+      appQuitReady = true;
+      app.quit();
+    }
+  })();
+  return appQuitPreparation;
+}
+
+function confirmMainWindowClose() {
   mainWindowCloseConfirmed = true;
   if (mainWindowCloseTimer !== null) {
     clearTimeout(mainWindowCloseTimer);
     mainWindowCloseTimer = null;
   }
-  mainWindow.close();
+  mainWindow?.close();
+}
+
+registerTrustedOn('app-close-ready', () => {
+  mainWindowCloseApproved = true;
+  confirmMainWindowClose();
 });
+
+function cancelMainWindowClose() {
+  if (mainWindowCloseTimer !== null) clearTimeout(mainWindowCloseTimer);
+  mainWindowCloseTimer = null;
+  mainWindowCloseConfirmed = false;
+  mainWindowCloseApproved = false;
+  appQuitRequested = false;
+}
+
+registerTrustedOn('app-close-canceled', cancelMainWindowClose);
 
 function setPlaybackAwake(active) {
   if (active) {
@@ -3240,6 +3225,10 @@ function createWindow() {
     });
   }
 
+  mainWindow.webContents.on('will-prevent-unload', event => {
+    if (mainWindowCloseApproved) event.preventDefault();
+    else cancelMainWindowClose();
+  });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
   for (const navigationEvent of ['will-navigate', 'will-redirect']) {
@@ -3263,9 +3252,8 @@ function createWindow() {
     if (mainWindowCloseTimer === null) {
       mainWindowCloseTimer = setTimeout(() => {
         if (!mainWindow || mainWindow.isDestroyed()) return;
-        mainWindowCloseConfirmed = true;
-        mainWindow.close();
-      }, 3000);
+        confirmMainWindowClose();
+      }, 8000);
     }
   });
 
@@ -3276,7 +3264,9 @@ function createWindow() {
       mainWindowCloseTimer = null;
     }
     mainWindowCloseConfirmed = false;
+    mainWindowCloseApproved = false;
     mainWindow = null;
+    if (appQuitRequested) void prepareAppQuit();
   });
 }
 
@@ -3402,7 +3392,19 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
+// The renderer must finish history/recording writes before the database closes.
+// A prevented BrowserWindow close cancels app.quit(), so resume it explicitly
+// after the renderer handshake (or the bounded close fallback).
+app.on('before-quit', event => {
+  if (appQuitReady) return;
+  event.preventDefault();
+  appQuitRequested = true;
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindowCloseConfirmed) mainWindow.close();
+  else void prepareAppQuit();
+});
+
+app.on('will-quit', () => {
+  for (const relay of playbackRelays.values()) closePlaybackRelay(relay);
   cleanupDiscordSocket();
   setPlaybackAwake(false);
   stopVlcProxyProcess();
@@ -3414,7 +3416,6 @@ app.on('before-quit', () => {
     try { recordingProcess.kill(); } catch {}
     recordingProcess = null;
   }
-  void dataStore.close();
 });
 
 // --- Discord Rich Presence Integration ---

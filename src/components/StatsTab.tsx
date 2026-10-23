@@ -1,3 +1,4 @@
+import { useI18n } from '../hooks/useI18n';
 import { useEffect, useMemo, useState } from 'react';
 import type { ComputedStats, HeatCell } from '../services/statsCalculator';
 import { createStatsCardObjectUrl, renderStatsCard } from '../services/statsCardRenderer';
@@ -12,6 +13,7 @@ interface StatsTabProps {
 const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCopyStatsCard, onSaveStatsCard }) => {
+  const { t, locale } = useI18n();
   const [activeListTab, setActiveListTab] = useState<'allTime' | 'lastMonth'>('allTime');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [cardPng, setCardPng] = useState<Uint8Array | null>(null);
@@ -70,8 +72,11 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
   const refreshStats = async () => {
     if (isRefreshing) return;
     setIsRefreshing(true);
+    setCardError('');
     try {
       await onRefreshStats();
+    } catch (error) {
+      setCardError(error instanceof Error ? error.message : 'Unable to load statistics.');
     } finally {
       setIsRefreshing(false);
     }
@@ -95,35 +100,35 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
     {
       label: 'TOTAL WATCH TIME',
       value: stats.totalWatchTime,
-      meta: `${stats.monthWatchTime} this month`,
+      meta: t('{value} this month', { value: stats.monthWatchTime }),
       tone: 'accent'
     },
     {
       label: 'MEASURED DATA',
       value: stats.totalDataFormatted,
-      meta: `${stats.monthDataFormatted} this month`,
+      meta: t('{value} this month', { value: stats.monthDataFormatted }),
       detail: stats.unmeasuredSessions !== '0'
-        ? `${stats.unmeasuredSessions} sessions without reliable byte count (${stats.unmeasuredWatchTime})`
+        ? t('{count} sessions without reliable byte count ({duration})', { count: stats.unmeasuredSessions, duration: stats.unmeasuredWatchTime })
         : undefined,
       tone: 'green'
     },
     {
       label: 'SESSIONS COUNT',
       value: stats.totalSessions,
-      meta: `Avg: ${stats.avgSessionLength} per session`,
+      meta: t('Avg: {duration} per session', { duration: stats.avgSessionLength }),
       tone: 'muted'
     },
     {
       label: 'PEAK TIMING',
       value: stats.peakHour,
-      meta: `Most active day: ${stats.peakDay}`,
+      meta: t('Most active day: {day}', { day: stats.peakDay }),
       tone: 'muted'
     },
     {
       label: 'LONGEST SESSION',
       value: stats.longestSession,
-      meta: stats.longestSessionChannel || 'No session recorded',
-      detail: stats.longestSessionStartedAt ? `Started ${stats.longestSessionStartedAt}` : undefined,
+      meta: stats.longestSessionChannel || t('No session recorded'),
+      detail: stats.longestSessionStartedAt ? t('Started {date}', { date: stats.longestSessionStartedAt }) : undefined,
       tone: 'orange'
     }
   ];
@@ -133,9 +138,7 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
       <div className="stats-inner">
         <div className="stats-header">
           <div className="stats-heading">
-            <p className="page-eyebrow">Activity</p>
-            <h2>Viewing statistics</h2>
-            <p>Your viewing habits, data usage, and watch history records.</p>
+            <h2>{t("Viewing statistics")}</h2>
           </div>
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -145,21 +148,21 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
                 <polyline points="16 6 12 2 8 6" />
                 <line x1="12" y1="2" x2="12" y2="15" />
               </svg>
-              <span>{isGeneratingCard ? 'Sharing…' : 'Share statistics'}</span>
+              <span>{t(isGeneratingCard ? 'Sharing…' : 'Share statistics')}</span>
             </button>
             <button className="btn-primary stats-refresh-button" onClick={refreshStats} type="button" disabled={isRefreshing} aria-busy={isRefreshing}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
               </svg>
-              <span>{isRefreshing ? 'Refreshing…' : 'Refresh Stats'}</span>
+              <span>{t(isRefreshing ? 'Refreshing…' : 'Refresh Stats')}</span>
             </button>
           </div>
         </div>
 
-        <section className="stats-summary-grid" aria-label="Statistics summary">
+        <section className="stats-summary-grid" aria-label={t("Statistics summary")}>
           {summaryCards.map(card => (
             <article className="stats-summary-card glass-card" key={card.label}>
-              <span className="stats-card-label">{card.label}</span>
+              <span className="stats-card-label">{t(card.label)}</span>
               <strong className="stats-card-value" title={card.value}>{card.value}</strong>
               <span className={`stats-card-meta stats-card-meta--${card.tone}`} title={card.meta}>
                 {card.meta}
@@ -175,7 +178,7 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
 
         <section className="stats-panel stats-heatmap-panel glass-card">
           <div className="stats-panel-header">
-            <h3>Daily Activity History</h3>
+            <h3>{t("Daily Activity History")}</h3>
             <span>{stats.heatmapStartMonth} - {stats.heatmapEndMonth}</span>
           </div>
 
@@ -183,11 +186,11 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
             <div className="stats-heatmap">
               <div className="stats-heatmap-days" aria-hidden="true">
                 {dayLabels.map(label => (
-                  <span key={label}>{label}</span>
+                  <span key={label}>{t(label)}</span>
                 ))}
               </div>
 
-              <div className="stats-heatmap-weeks" role="list" aria-label="Daily activity for the last year">
+              <div className="stats-heatmap-weeks" role="list" aria-label={t("Daily activity for the last year")}>
                 {heatmapWeeks.map((week, weekIndex) => (
                   <div className="stats-heatmap-week" key={weekIndex} role="presentation">
                     {week.map((cell) => {
@@ -216,23 +219,23 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
           </div>
 
           <div className="stats-heatmap-legend" aria-hidden="true">
-            <span>Less</span>
+            <span>{t("Less")}</span>
             <i style={{ '--activity': 'rgba(255, 255, 255, 0.045)' } as React.CSSProperties} />
             <i style={{ '--activity': 'rgba(32, 208, 113, 0.25)' } as React.CSSProperties} />
             <i style={{ '--activity': 'rgba(32, 208, 113, 0.5)' } as React.CSSProperties} />
             <i style={{ '--activity': 'rgba(32, 208, 113, 0.75)' } as React.CSSProperties} />
             <i style={{ '--activity': 'rgba(32, 208, 113, 1)' } as React.CSSProperties} />
-            <span>More</span>
+            <span>{t("More")}</span>
           </div>
         </section>
 
         <div className="stats-distribution-grid">
           <section className="stats-panel glass-card">
             <div className="stats-panel-header">
-              <h3>Hourly Activity Distribution</h3>
+              <h3>{t("Hourly Activity Distribution")}</h3>
             </div>
 
-            <div className="stats-hour-chart" role="list" aria-label="Hourly activity distribution">
+            <div className="stats-hour-chart" role="list" aria-label={t("Hourly activity distribution")}>
               {stats.hourBars.map(bar => (
                 <span
                   className="stats-hour-bar-shell"
@@ -252,17 +255,17 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
             </div>
 
             <div className="stats-hour-axis" aria-hidden="true">
-              <span>12 AM</span>
-              <span>6 AM</span>
-              <span>12 PM</span>
-              <span>6 PM</span>
-              <span>11 PM</span>
+              <span>{t("12 AM")}</span>
+              <span>{t("6 AM")}</span>
+              <span>{t("12 PM")}</span>
+              <span>{t("6 PM")}</span>
+              <span>{t("11 PM")}</span>
             </div>
           </section>
 
           <section className="stats-panel glass-card">
             <div className="stats-panel-header">
-              <h3>Weekly Distribution</h3>
+              <h3>{t("Weekly Distribution")}</h3>
             </div>
 
             <div className="stats-week-list">
@@ -281,9 +284,9 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
 
         <section className="stats-panel stats-top-panel glass-card">
           <div className="stats-top-header">
-            <h3>Top 10 Watched Channels</h3>
+            <h3>{t("Top 10 Watched Channels")}</h3>
 
-            <div className="stats-segmented-control" role="tablist" aria-label="Top channel period">
+            <div className="stats-segmented-control" role="tablist" aria-label={t("Top channel period")}>
               <button
                 id="stats-tab-all"
                 type="button"
@@ -298,9 +301,7 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
                     selectAdjacentTab();
                   }
                 }}
-              >
-                All Time
-              </button>
+              >{t("All Time")}</button>
               <button
                 id="stats-tab-month"
                 type="button"
@@ -315,9 +316,7 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
                     selectAdjacentTab();
                   }
                 }}
-              >
-                This Month
-              </button>
+              >{t("This Month")}</button>
             </div>
           </div>
 
@@ -328,12 +327,12 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
                   <div className="stats-top-row-main">
                     <span className="stats-top-rank">{index + 1}</span>
                     <span className="stats-top-name" title={entry.name}>{entry.name}</span>
-                    <span className="stats-top-group" title={entry.group}>{entry.group || 'Uncategorised'}</span>
+                    <span className="stats-top-group" title={entry.group}>{entry.group || t('Uncategorised')}</span>
                   </div>
 
                   <div className="stats-top-row-meta">
                     <span>{formatDurationShort(entry.totalTimeMs)}</span>
-                    <span>({entry.sessionCount} sessions)</span>
+                    <span>{t('({count} sessions)', { count: entry.sessionCount.toLocaleString(locale) })}</span>
                   </div>
 
                   <div className="stats-top-progress" aria-hidden="true">
@@ -342,9 +341,7 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
                 </article>
               ))
             ) : (
-              <div className="stats-empty-state">
-                No history recorded for this period.
-              </div>
+              <div className="stats-empty-state">{t("No history recorded for this period.")}</div>
             )}
           </div>
         </section>
@@ -362,21 +359,20 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
           <section className="glass-card" style={{ width: 'min(960px, 94vw)', padding: 20, background: '#151918', border: '1px solid rgba(255,255,255,.12)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', marginBottom: 16 }}>
               <div>
-                <h3 id="stats-card-dialog-title" style={{ margin: 0 }}>Share viewing statistics</h3>
-                <p style={{ margin: '6px 0 0', opacity: 0.7 }}>PNG · 1200 × 736 · last 365 days</p>
+                <h3 id="stats-card-dialog-title" style={{ margin: 0 }}>{t("Share viewing statistics")}</h3>
               </div>
-              <button className="btn-secondary" type="button" onClick={() => setCardPreviewUrl('')} aria-label="Close image preview">Close</button>
+              <button className="btn-secondary" type="button" onClick={() => setCardPreviewUrl('')} aria-label={t("Close image preview")}>{t("Close")}</button>
             </div>
-            <img src={cardPreviewUrl} alt="Preview of the Freaky IPTV viewing statistics card" style={{ display: 'block', width: '100%', height: 'auto', borderRadius: 16, background: '#111413' }} />
-            {cardError && <p role="alert" style={{ color: '#ff9b8f', margin: '12px 0 0' }}>{cardError}</p>}
+            <img src={cardPreviewUrl} alt={t("Preview of the Freaky IPTV viewing statistics card")} style={{ display: 'block', width: '100%', height: 'auto', borderRadius: 16, background: '#111413' }} />
+            {cardError && <p role="alert" style={{ color: '#ff9b8f', margin: '12px 0 0' }}>{t(cardError)}</p>}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
-              <button className="btn-secondary" type="button" onClick={copyCard}>Copy image</button>
-              <button className="btn-primary" type="button" onClick={saveCard}>Save PNG</button>
+              <button className="btn-secondary" type="button" onClick={copyCard}>{t("Copy image")}</button>
+              <button className="btn-primary" type="button" onClick={saveCard}>{t("Save PNG")}</button>
             </div>
           </section>
         </div>
       )}
-      {!cardPreviewUrl && cardError && <p role="alert" style={{ color: '#ff9b8f', margin: 16 }}>{cardError}</p>}
+      {!cardPreviewUrl && cardError && <p role="alert" style={{ color: '#ff9b8f', margin: 16 }}>{t(cardError)}</p>}
     </div>
   );
 };

@@ -414,6 +414,7 @@ declare global {
       clearDiscordActivity: () => Promise<boolean>;
       onAppBeforeClose: (callback: () => void) => () => void;
       confirmAppClose: () => void;
+      cancelAppClose: () => void;
     };
   }
 }

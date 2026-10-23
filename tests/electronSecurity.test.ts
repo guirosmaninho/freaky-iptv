@@ -276,7 +276,7 @@ describe('Electron security contract', () => {
     assert.match(mainSource, /registerTrustedHandle\('start-playback-relay'/);
     assert.match(mainSource, /registerTrustedHandle\('stop-playback-relay'/);
     assert.match(mainSource, /registerTrustedHandle\('get-playback-relay-traffic'/);
-    assert.match(mainSource, /const recordingInputUrl = relay \? `\$\{relay\.url\}\&consumer=recording` : request\.sourceUrl/);
+    assert.match(mainSource, /const recordingInputUrl = relay \? `\$\{relay\.url\}&consumer=recording` : request\.sourceUrl/);
     assert.match(mainSource, /registerTrustedHandle\('copy-statistics-card'/);
     assert.match(mainSource, /registerTrustedHandle\('save-statistics-card'/);
     assert.doesNotMatch(mainSource, /registerTrustedHandle\('begin-playback-recording'/);

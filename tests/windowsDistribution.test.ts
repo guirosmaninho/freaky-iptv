@@ -47,6 +47,7 @@ describe('Windows distribution contract', () => {
     assert.match(packageJson.scripts['build:libvlc-proxy'], /--self-contained true/);
     assert.ok(packageJson.build.files.includes('native-runtime-package/**'));
     assert.ok(packageJson.build.asarUnpack.includes('native-runtime-package/**'));
+    assert.ok(packageJson.build.asarUnpack.includes('electron/dataWorker.cjs'));
 
     const mainSource = readProjectFile('main.cjs');
     assert.match(mainSource, /getNativeRuntimePath\('dpapi', 'dpapi-helper\.exe'\)/);
@@ -135,10 +136,10 @@ describe('Windows distribution contract', () => {
 
       const assetDirectory = join(outputDirectory, 'assets');
       const cssFiles = readdirSync(assetDirectory).filter(fileName => fileName.endsWith('.css'));
-      assert.equal(cssFiles.length, 1);
+      assert.ok(cssFiles.length > 0, 'Expected at least one production stylesheet');
 
-      const sourceCss = readProjectFile('src/index.css');
-      const productionCss = readFileSync(join(assetDirectory, cssFiles[0]), 'utf8');
+      const sourceCss = ['src/index.css', 'src/navigation.css', 'src/settings.css'].map(readProjectFile).join('\n');
+      const productionCss = cssFiles.map(file => readFileSync(join(assetDirectory, file), 'utf8')).join('');
       assert.ok(
         Buffer.byteLength(productionCss) < Buffer.byteLength(sourceCss) * 0.85,
         'Expected the production stylesheet to be minified'

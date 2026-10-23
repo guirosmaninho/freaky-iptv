@@ -80,4 +80,5 @@ contextBridge.exposeInMainWorld('electron', {
     return () => ipcRenderer.removeListener('app-before-close', listener);
   },
   confirmAppClose: () => ipcRenderer.send('app-close-ready'),
+  cancelAppClose: () => ipcRenderer.send('app-close-canceled'),
 });

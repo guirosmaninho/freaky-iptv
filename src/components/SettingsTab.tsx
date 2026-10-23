@@ -1,6 +1,9 @@
+import { useI18n } from '../hooks/useI18n';
 import React, { useEffect, useMemo, useState } from 'react';
 import type { AppLanguage, StorageInfo, UiTheme } from '../types';
 import { DiagnosticsTab } from './DiagnosticsTab';
+import { NumberField, SettingsSection, StatusRow } from './settings/SettingsFields';
+import '../settings.css';
 import {
   DEFAULT_QUALITY_MAPPINGS,
   findDuplicateQualityKeywords,
@@ -61,6 +64,7 @@ interface SettingsTabProps {
 const QUALITY_MAPPING_ORDER = ['4K', 'FHD', 'HEVC', 'HD', 'SD', 'Low', 'Backup'];
 
 export const SettingsTab: React.FC<SettingsTabProps> = (props) => {
+  const { t } = useI18n();
   const {
     initialPlaylistUrl, initialEpgUrl, initialQualityMappings, initialAutoRefreshHours,
     initialAutoplayLastChannel, initialHistoryRetentionDays,
@@ -88,6 +92,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = (props) => {
   const [exportPassword, setExportPassword] = useState('');
   const [exportPasswordConfirmation, setExportPasswordConfirmation] = useState('');
   const [importPassword, setImportPassword] = useState('');
+  const [category, setCategory] = useState('sources');
   const [message, setMessage] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
@@ -95,11 +100,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = (props) => {
 
   const normalizedMappings = useMemo(() => normalizeQualityMappings(qualityMappings), [qualityMappings]);
   const duplicateQualityKeywords = useMemo(() => findDuplicateQualityKeywords(normalizedMappings), [normalizedMappings]);
-  const playlistError = validateSourceUrl(playlistUrl, true);
+  const playlistError = validateSourceUrl(playlistUrl, false);
   const epgError = validateSourceUrl(epgUrl, false);
   const hasValidationErrors = Boolean(playlistError || epgError || duplicateQualityKeywords.length > 0);
   const isBusy = isLoading || isSaving || isTesting;
-  const footerMessage = message || (isDirty ? 'You have unsaved changes.' : 'All changes are saved.');
+  const footerMessage = t(message || (isDirty ? 'You have unsaved changes.' : ''));
 
   useEffect(() => {
     onDirtyChange?.(isDirty);
@@ -198,7 +203,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = (props) => {
   };
 
   const runDestructiveAction = async (label: string, action: () => Promise<void>, successMessage: string) => {
-    if (!window.confirm(`${label}? This action cannot be undone.`)) return;
+    if (!window.confirm(t('{action}? This action cannot be undone.', { action: t(label) }))) return;
     setIsSaving(true);
     setMessage('');
     try { await action(); setMessage(successMessage); }
@@ -222,7 +227,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = (props) => {
 
   const importBackup = async () => {
     if (importPassword.length < 10) return setMessage('Backup password must contain at least 10 characters.');
-    if (isDirty && !window.confirm('Discard unsaved settings changes and import this backup?')) return;
+    if (isDirty && !window.confirm(t('Discard unsaved settings changes and import this backup?'))) return;
     setIsSaving(true);
     try {
       if (await onImportBackup(importPassword)) {
@@ -237,94 +242,98 @@ export const SettingsTab: React.FC<SettingsTabProps> = (props) => {
   };
 
   return (
-    <div className="animate-fade settings-page settings-page--linear">
+    <div className="animate-fade settings-page settings-page--grouped">
       <header className="page-header settings-header">
-        <div><p className="page-eyebrow">Freaky IPTV</p><h2>Settings</h2><p>Configure the app from top to bottom. Advanced details stay out of the way.</p></div>
+        <div><h2>{t("Settings")}</h2></div>
       </header>
 
-      <SettingsSection id="sources" title="Sources" description="Connect your channel list and optional programme guide.">
-        <SecretUrlField id="settings-playlist-url" label="M3U playlist URL" value={playlistUrl} visible={showPlaylistUrl} error={playlistError} disabled={isBusy} placeholder="https://example.com/playlist.m3u" onVisibility={setShowPlaylistUrl} onChange={(value) => change(setPlaylistUrl, value)} />
-        <SecretUrlField id="settings-epg-url" label="XMLTV EPG URL (optional)" value={epgUrl} visible={showEpgUrl} error={epgError} disabled={isBusy} placeholder="https://example.com/epg.xml" onVisibility={setShowEpgUrl} onChange={(value) => change(setEpgUrl, value)} />
+      <div className="settings-workspace">
+        <nav className="settings-category-nav" aria-label={t("Settings categories")}>
+          {(['sources', 'playback', 'appearance', 'privacy', 'advanced'] as const).map(item => <button type="button" key={item} className={category === item ? 'is-selected' : ''} aria-current={category === item ? 'page' : undefined} onClick={() => setCategory(item)}><strong>{t(item[0].toUpperCase() + item.slice(1))}</strong></button>)}
+        </nav>
+        <div className="settings-category-panel" key={category}>
+      {category === 'sources' && <SettingsSection id="sources" title={t("Sources")}>
+        <SecretUrlField id="settings-playlist-url" label={t("M3U playlist URL")} value={playlistUrl} visible={showPlaylistUrl} error={playlistError} disabled={isBusy} placeholder={t("https://example.com/playlist.m3u")} onVisibility={setShowPlaylistUrl} onChange={(value) => change(setPlaylistUrl, value)} />
+        <SecretUrlField id="settings-epg-url" label={t("XMLTV EPG URL (optional)")} value={epgUrl} visible={showEpgUrl} error={epgError} disabled={isBusy} placeholder={t("https://example.com/epg.xml")} onVisibility={setShowEpgUrl} onChange={(value) => change(setEpgUrl, value)} />
         <div className="settings-inline-fields">
-          <NumberField label="Refresh sources every (hours)" hint="Use 0 to disable automatic refresh." value={autoRefreshHours} min={0} max={168} disabled={isBusy} onChange={(value) => change(setAutoRefreshHours, value)} />
+          <NumberField zeroLabel={t("Off")} enabledValue={24} label={t("Refresh sources every (hours)")} value={autoRefreshHours} min={0} max={168} disabled={isBusy} onChange={(value) => change(setAutoRefreshHours, value)} />
         </div>
         <div className="settings-source-actions">
-          <button type="button" className="btn-secondary" onClick={testSources} disabled={isBusy || Boolean(playlistError || epgError)}>{isTesting ? 'Testing…' : 'Test connection'}</button>
-          <button type="button" className="btn-secondary" onClick={() => void save(true)} disabled={isBusy || hasValidationErrors}>{isSaving ? 'Synchronizing…' : 'Synchronize now'}</button>
+          <button type="button" className="btn-secondary" onClick={testSources} disabled={isBusy || !playlistUrl.trim() || Boolean(playlistError || epgError)}>{t(isTesting ? 'Testing…' : 'Test connection')}</button>
+          <button type="button" className="btn-secondary" onClick={() => void save(true)} disabled={isBusy || !playlistUrl.trim() || hasValidationErrors}>{t(isSaving ? 'Synchronizing…' : 'Synchronize now')}</button>
         </div>
-      </SettingsSection>
+      </SettingsSection>}
 
-      <SettingsSection id="playback" title="Playback" description="Choose what happens when the application starts.">
-        <label className="settings-switch-row"><input type="checkbox" checked={autoplayLastChannel} onChange={(event) => change(setAutoplayLastChannel, event.target.checked)} disabled={isBusy} /><span><strong>Play the last channel automatically</strong><small>Resume the most recently watched channel after startup.</small></span></label>
-      </SettingsSection>
+      {category === 'playback' && <SettingsSection id="playback" title={t("Playback")}>
+        <label className="settings-switch-row"><input type="checkbox" checked={autoplayLastChannel} onChange={(event) => change(setAutoplayLastChannel, event.target.checked)} disabled={isBusy} /><span><strong>{t("Play the last channel automatically")}</strong></span></label>
+      </SettingsSection>}
 
-      <SettingsSection id="recordings" title="Recordings" description="Recordings and screenshots use the same destination. Video is saved as source-quality MKV.">
-        <label className="settings-field"><span>Output folder</span><div className="settings-path-row"><input className="text-input" value={recordingDirectory} readOnly aria-label="Recording output folder" /><button type="button" className="btn-secondary" onClick={chooseRecordingDirectory} disabled={isBusy}>Choose</button><button type="button" className="btn-secondary" onClick={() => void window.electron.openRecordingDirectory()} disabled={isBusy}>Open</button></div></label>
-        <p className="settings-inline-note"><strong>MKV · original quality</strong><span>The app records a separate copy of the source stream.</span></p>
-      </SettingsSection>
+      {category === 'playback' && <SettingsSection id="recordings" title={t("Recordings")}>
+        <label className="settings-field"><span>{t("Output folder")}</span><div className="settings-path-row"><input className="text-input" value={recordingDirectory} readOnly aria-label={t("Recording output folder")} /><button type="button" className="btn-secondary" onClick={chooseRecordingDirectory} disabled={isBusy}>{t("Choose")}</button><button type="button" className="btn-secondary" onClick={() => void window.electron.openRecordingDirectory()} disabled={isBusy}>{t("Open")}</button></div></label>
 
-      <SettingsSection id="appearance" title="Appearance" description="Changes are previewed immediately. Discard restores the saved theme.">
-        <div className="segmented-control appearance-segmented" role="radiogroup" aria-label="Application appearance">
-          {(['system', 'light', 'dark'] as const).map(option => <button key={option} type="button" role="radio" aria-checked={appearance === option} className={appearance === option ? 'is-selected' : ''} onClick={() => change(setAppearance, option)} disabled={isBusy}>{option === 'system' ? 'Use system setting' : option === 'light' ? 'Light' : 'Dark'}</button>)}
+      </SettingsSection>}
+
+      {category === 'appearance' && <SettingsSection id="appearance" title={t("Appearance")}>
+        <div className="segmented-control appearance-segmented" role="radiogroup" aria-label={t("Application appearance")}>
+          {(['system', 'light', 'dark'] as const).map(option => <button key={option} type="button" role="radio" aria-checked={appearance === option} className={appearance === option ? 'is-selected' : ''} onClick={() => change(setAppearance, option)} disabled={isBusy}>{t(option === 'system' ? 'Use system setting' : option === 'light' ? 'Light' : 'Dark')}</button>)}
         </div>
-        <label className="settings-field"><span>Language</span><select className="text-input" value={language} onChange={(event) => change(setLanguage, event.target.value as AppLanguage)} disabled={isBusy} aria-label="Application language"><option value="system">Use system language</option><option value="pt-PT">Portuguese (Portugal)</option><option value="en">English</option></select></label>
-      </SettingsSection>
+        <label className="settings-field"><span>{t("Language")}</span><select className="text-input" value={language} onChange={(event) => change(setLanguage, event.target.value as AppLanguage)} disabled={isBusy} aria-label={t("Application language")}><option value="system">{t("Use system language")}</option><option value="pt-PT">{t("Portuguese (Portugal)")}</option><option value="en">{t("English")}</option></select></label>
+      </SettingsSection>}
 
-      <SettingsSection id="integrations" title="Integrations" description="Control what Freaky IPTV shares with connected applications.">
-        <label className="settings-switch-row"><input type="checkbox" checked={discordRpcEnabled} onChange={(event) => change(setDiscordRpcEnabled, event.target.checked)} disabled={isBusy} /><span><strong>Discord Rich Presence</strong><small>Show that Freaky IPTV is active on your Discord profile.</small></span></label>
-        <label className="settings-switch-row" data-disabled={!discordRpcEnabled}><input type="checkbox" checked={discordShowChannel} onChange={(event) => change(setDiscordShowChannel, event.target.checked)} disabled={isBusy || !discordRpcEnabled} /><span><strong>Include the channel name</strong><small>Only enabled while Discord Rich Presence is active.</small></span></label>
-        <label className="settings-switch-row" data-disabled={!discordRpcEnabled}><input type="checkbox" checked={discordShowProgram} onChange={(event) => change(setDiscordShowProgram, event.target.checked)} disabled={isBusy || !discordRpcEnabled} /><span><strong>Include programme title</strong><small>Off by default to keep viewing private.</small></span></label>
-        <label className="settings-switch-row" data-disabled={!discordRpcEnabled}><input type="checkbox" checked={discordShowArtwork} onChange={(event) => change(setDiscordShowArtwork, event.target.checked)} disabled={isBusy || !discordRpcEnabled} /><span><strong>Include channel artwork</strong><small>Artwork is sent through the external images.weserv.nl proxy.</small></span></label>
-      </SettingsSection>
+      {category === 'privacy' && <SettingsSection id="integrations" title={t("Integrations")}>
+        <label className="settings-switch-row"><input type="checkbox" checked={discordRpcEnabled} onChange={(event) => change(setDiscordRpcEnabled, event.target.checked)} disabled={isBusy} /><span><strong>{t("Discord Rich Presence")}</strong></span></label>
+        <label className="settings-switch-row" data-disabled={!discordRpcEnabled}><input type="checkbox" checked={discordShowChannel} onChange={(event) => change(setDiscordShowChannel, event.target.checked)} disabled={isBusy || !discordRpcEnabled} /><span><strong>{t("Include the channel name")}</strong></span></label>
+        <label className="settings-switch-row" data-disabled={!discordRpcEnabled}><input type="checkbox" checked={discordShowProgram} onChange={(event) => change(setDiscordShowProgram, event.target.checked)} disabled={isBusy || !discordRpcEnabled} /><span><strong>{t("Include programme title")}</strong></span></label>
+        <label className="settings-switch-row" data-disabled={!discordRpcEnabled}><input type="checkbox" checked={discordShowArtwork} onChange={(event) => change(setDiscordShowArtwork, event.target.checked)} disabled={isBusy || !discordRpcEnabled} /><span><strong>{t("Include channel artwork")}</strong></span></label>
+      </SettingsSection>}
 
-      <SettingsSection id="data" title="Data & privacy" description="Choose how long local activity is retained, create encrypted backups, or remove data.">
-        <div className="settings-inline-fields"><NumberField label="Keep viewing history for (days)" hint="Use 0 to keep history indefinitely." value={historyRetentionDays} min={0} max={3650} disabled={isBusy} onChange={(value) => change(setHistoryRetentionDays, value)} /></div>
+      {category === 'privacy' && <SettingsSection id="data" title={t("Data & privacy")}>
+        <div className="settings-inline-fields"><NumberField zeroLabel={t("Keep forever")} enabledValue={30} label={t("Keep viewing history for (days)")} value={historyRetentionDays} min={0} max={3650} disabled={isBusy} onChange={(value) => change(setHistoryRetentionDays, value)} /></div>
         <div className="settings-backup-fields">
-          <div className="settings-subheading"><strong>Encrypted backup</strong><span>Passwords must contain at least 10 characters.</span></div>
-          <input type="password" className="text-input" placeholder="Export password" value={exportPassword} onChange={(event) => setExportPassword(event.target.value)} autoComplete="new-password" />
-          <input type="password" className="text-input" placeholder="Confirm export password" value={exportPasswordConfirmation} onChange={(event) => setExportPasswordConfirmation(event.target.value)} autoComplete="new-password" />
-          <button type="button" className="btn-secondary" disabled={isBusy} onClick={exportBackup}>Export encrypted backup</button>
-          <input type="password" className="text-input" placeholder="Password for imported backup" value={importPassword} onChange={(event) => setImportPassword(event.target.value)} autoComplete="current-password" />
-          <button type="button" className="btn-secondary" disabled={isBusy} onClick={importBackup}>Import and merge backup</button>
+          <div className="settings-subheading"><strong>{t("Encrypted backup")}</strong></div>
+          <input type="password" className="text-input" placeholder={t("Export password (10+ characters)")} aria-label={t("Export password")} minLength={10} value={exportPassword} onChange={(event) => setExportPassword(event.target.value)} autoComplete="new-password" />
+          <input type="password" className="text-input" placeholder={t("Confirm export password")} aria-label={t("Confirm export password")} value={exportPasswordConfirmation} onChange={(event) => setExportPasswordConfirmation(event.target.value)} autoComplete="new-password" />
+          <button type="button" className="btn-secondary" disabled={isBusy} onClick={exportBackup}>{t("Export encrypted backup")}</button>
+          <input type="password" className="text-input" placeholder={t("Password for imported backup")} aria-label={t("Password for imported backup")} value={importPassword} onChange={(event) => setImportPassword(event.target.value)} autoComplete="current-password" />
+          <button type="button" className="btn-secondary" disabled={isBusy} onClick={importBackup}>{t("Import and merge backup")}</button>
         </div>
         <div className="settings-data-actions">
-          <button className="btn-secondary" type="button" disabled={isBusy} onClick={() => void runDestructiveAction('Clear the cached channel list and guide', onClearCache, 'Cache cleared.')}>Clear cache</button>
-          <button className="btn-secondary" type="button" disabled={isBusy} onClick={() => void runDestructiveAction('Clear all viewing history', onClearHistory, 'History cleared.')}>Clear history</button>
-          <button className="btn-secondary" type="button" disabled={isBusy || favoritesCount === 0} onClick={() => void runDestructiveAction(`Clear ${favoritesCount} favorites`, onClearFavorites, 'Favorites cleared.')}>Clear favorites ({favoritesCount})</button>
-          <button className="btn-secondary" type="button" disabled={isBusy || recentCount === 0} onClick={() => void runDestructiveAction(`Clear ${recentCount} recent channels`, onClearRecents, 'Recent channels cleared.')}>Clear recents ({recentCount})</button>
+          <button className="btn-secondary" type="button" disabled={isBusy} onClick={() => void runDestructiveAction('Clear the cached channel list and guide', onClearCache, 'Cache cleared.')}>{t("Clear cache")}</button>
+          <button className="btn-secondary" type="button" disabled={isBusy} onClick={() => void runDestructiveAction('Clear all viewing history', onClearHistory, 'History cleared.')}>{t("Clear history")}</button>
+          <button className="btn-secondary" type="button" disabled={isBusy || favoritesCount === 0} onClick={() => void runDestructiveAction(`Clear ${favoritesCount} favorites`, onClearFavorites, 'Favorites cleared.')}>{t('Clear favorites ({count})', { count: favoritesCount })}</button>
+          <button className="btn-secondary" type="button" disabled={isBusy || recentCount === 0} onClick={() => void runDestructiveAction(`Clear ${recentCount} recent channels`, onClearRecents, 'Recent channels cleared.')}>{t('Clear recents ({count})', { count: recentCount })}</button>
         </div>
-      </SettingsSection>
+      </SettingsSection>}
 
-      <SettingsSection id="diagnostics" title="Diagnostics" description="Inspect local health and export a redacted support report.">
+      {category === 'advanced' && <SettingsSection id="diagnostics" title={t("Diagnostics")}>
         <DiagnosticsTab embedded />
-      </SettingsSection>
+      </SettingsSection>}
 
-      <details className="settings-advanced">
-        <summary><span><strong>Advanced</strong><small>Diagnostics and quality detection labels</small></span><span aria-hidden="true">⌄</span></summary>
+      {category === 'advanced' && <section className="settings-group settings-advanced">
+        <h3>{t('Local storage & quality')}</h3>
         <div className="settings-advanced-content">
           <div className="settings-status-grid">
-            <StatusRow label="Playlist cache" value={cacheStatus || 'No cache loaded'} /><StatusRow label="TV guide cache" value={guideStatus || 'No guide loaded'} /><StatusRow label="Operation" value={statusText} strong={isLoading} /><StatusRow label="Data folder" value={storageInfo?.dataDir || 'Unavailable'} /><StatusRow label="Migration" value={storageInfo?.migrationStatus ? `${storageInfo.migrationStatus.status}${storageInfo.migrationStatus.copied.length ? ` (${storageInfo.migrationStatus.copied.length} files copied)` : ''}` : 'Unavailable'} /><StatusRow label="Cache size" value={formatBytes(storageInfo?.cacheBytes || 0)} /><StatusRow label="History size" value={formatBytes(storageInfo?.historyBytes || 0)} /><StatusRow label="Last update" value={formatDate(storageInfo?.cacheUpdatedAtUtc)} />
+            <StatusRow label={t("Playlist cache")} value={cacheStatus || 'No cache loaded'} /><StatusRow label={t("TV guide cache")} value={guideStatus || 'No guide loaded'} /><StatusRow label={t("Operation")} value={t(statusText)} strong={isLoading} /><StatusRow label={t("Data folder")} value={storageInfo?.dataDir || 'Unavailable'} /><StatusRow label={t("Migration")} value={storageInfo?.migrationStatus ? `${storageInfo.migrationStatus.status}${storageInfo.migrationStatus.copied.length ? ` (${storageInfo.migrationStatus.copied.length} files copied)` : ''}` : 'Unavailable'} /><StatusRow label={t("Cache size")} value={formatBytes(storageInfo?.cacheBytes || 0)} /><StatusRow label={t("History size")} value={formatBytes(storageInfo?.historyBytes || 0)} /><StatusRow label={t("Last update")} value={formatDate(storageInfo?.cacheUpdatedAtUtc)} />
           </div>
-          <div className="settings-quality-header"><span>Quality detection labels</span>{duplicateQualityKeywords.length > 0 && <span role="alert">Duplicate keywords: {duplicateQualityKeywords.join(', ')}</span>}<button type="button" className="btn-secondary" onClick={() => { setQualityMappings(DEFAULT_QUALITY_MAPPINGS); markDirty(); }} disabled={isBusy}>Reset defaults</button></div>
-          <div className="settings-quality-grid">{QUALITY_MAPPING_ORDER.map(label => <label key={label} htmlFor={`quality-mapping-${label}`}><span>{label}</span><input id={`quality-mapping-${label}`} type="text" className="text-input" value={qualityMappings[label] || ''} onChange={(event) => { setQualityMappings(previous => ({ ...previous, [label]: event.target.value })); markDirty(); }} placeholder="Comma-separated keywords" disabled={isBusy} /></label>)}</div>
+          <div className="settings-quality-header"><span>{t("Quality detection labels")}</span>{duplicateQualityKeywords.length > 0 && <span role="alert">{t("Duplicate keywords:")} {duplicateQualityKeywords.join(', ')}</span>}<button type="button" className="btn-secondary" onClick={() => { setQualityMappings(DEFAULT_QUALITY_MAPPINGS); markDirty(); }} disabled={isBusy}>{t("Reset defaults")}</button></div>
+          <div className="settings-quality-grid">{QUALITY_MAPPING_ORDER.map(label => <label key={label} htmlFor={`quality-mapping-${label}`}><span>{label}</span><input id={`quality-mapping-${label}`} type="text" className="text-input" value={qualityMappings[label] || ''} onChange={(event) => { setQualityMappings(previous => ({ ...previous, [label]: event.target.value })); markDirty(); }} placeholder={t("Comma-separated keywords")} disabled={isBusy} /></label>)}</div>
         </div>
-      </details>
+      </section>}
 
+        </div>
+      </div>
       <div className="settings-save-bar" aria-live="polite">
         <span className={hasValidationErrors ? 'is-error' : ''}>{footerMessage}</span>
-        <div><button type="button" className="btn-secondary" onClick={discard} disabled={isBusy || !isDirty}>Discard</button><button type="button" className="btn-primary" onClick={() => void save(false)} disabled={isBusy || !isDirty || hasValidationErrors}>{isSaving ? 'Saving…' : 'Save changes'}</button></div>
+        <div><button type="button" className="btn-secondary" onClick={discard} disabled={isBusy || !isDirty}>{t("Discard")}</button><button type="button" className="btn-primary" onClick={() => void save(false)} disabled={isBusy || !isDirty || hasValidationErrors}>{t(isSaving ? 'Saving…' : 'Save changes')}</button></div>
       </div>
     </div>
   );
 };
 
-const SettingsSection: React.FC<React.PropsWithChildren<{ id: string; title: string; description: string }>> = ({ id, title, description, children }) => <section className="settings-group" aria-labelledby={`${id}-heading`}><div className="settings-group-heading"><h3 id={`${id}-heading`}>{title}</h3><p>{description}</p></div>{children}</section>;
 
-const SecretUrlField: React.FC<{ id: string; label: string; value: string; visible: boolean; error: string | null; disabled: boolean; placeholder: string; onVisibility: (visible: boolean) => void; onChange: (value: string) => void }> = ({ id, label, value, visible, error, disabled, placeholder, onVisibility, onChange }) => <label className="settings-field" htmlFor={id}><span>{label}{error && <em id={`${id}-error`}>{error}</em>}</span><div className="settings-secret-field"><input id={id} type={visible ? 'url' : 'password'} className="text-input" value={value} onChange={(event) => onChange(event.target.value)} onBlur={() => onVisibility(false)} placeholder={placeholder} disabled={disabled} aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined} spellCheck={false} autoComplete="off" /><button type="button" className="btn-secondary" aria-controls={id} aria-pressed={visible} onMouseDown={(event) => event.preventDefault()} onClick={() => onVisibility(!visible)} disabled={disabled}>{visible ? 'Hide' : 'Show'}</button></div></label>;
+const SecretUrlField: React.FC<{ id: string; label: string; value: string; visible: boolean; error: string | null; disabled: boolean; placeholder: string; onVisibility: (visible: boolean) => void; onChange: (value: string) => void }> = ({ id, label, value, visible, error, disabled, placeholder, onVisibility, onChange }) => { const { t } = useI18n(); return <label className="settings-field" htmlFor={id}><span>{label}{error && <em id={`${id}-error`}>{t(error)}</em>}</span><div className="settings-secret-field"><input id={id} type={visible ? 'url' : 'password'} className="text-input" value={value} onChange={(event) => onChange(event.target.value)} onBlur={() => onVisibility(false)} placeholder={placeholder} disabled={disabled} aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined} spellCheck={false} autoComplete="off" /><button type="button" className="btn-secondary" aria-controls={id} aria-pressed={visible} onMouseDown={(event) => event.preventDefault()} onClick={() => onVisibility(!visible)} disabled={disabled}>{t(visible ? 'Hide' : 'Show')}</button></div></label>; };
 
-const NumberField: React.FC<{ label: string; hint: string; value: number; min: number; max: number; disabled: boolean; onChange: (value: number) => void }> = ({ label, hint, value, min, max, disabled, onChange }) => <label className="settings-field"><span>{label}<small>{hint}</small></span><input type="number" className="text-input" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} disabled={disabled} /></label>;
 
-const StatusRow: React.FC<{ label: string; value: string; strong?: boolean }> = ({ label, value, strong }) => <div><span>{label}</span><strong className={strong ? 'is-active' : ''}>{value}</strong></div>;
 
 function formatBytes(bytes: number): string { if (!bytes) return '0 KB'; const mb = bytes / (1024 * 1024); return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`; }
 function formatDate(value?: string): string { if (!value) return 'Never'; const date = new Date(value); return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString(); }

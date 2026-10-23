@@ -1,11 +1,13 @@
 using LibVLCSharp.Shared;
 
+var verifyRuntime = args.Length == 1 && args[0] == "--verify-runtime";
 var streamUrl = Environment.GetEnvironmentVariable("IPTV_PROXY_SOURCE_URL");
 var portText = Environment.GetEnvironmentVariable("IPTV_PROXY_PORT");
 
-if (string.IsNullOrWhiteSpace(streamUrl) ||
-    !int.TryParse(portText, out var port) ||
-    port <= 0)
+var port = 0;
+if (!verifyRuntime && (string.IsNullOrWhiteSpace(streamUrl) ||
+    !int.TryParse(portText, out port) ||
+    port <= 0))
 {
     Console.Error.WriteLine("Missing IPTV_PROXY_SOURCE_URL or IPTV_PROXY_PORT.");
     return 2;
@@ -21,10 +23,22 @@ Console.CancelKeyPress += (_, e) =>
 
 try
 {
-    Core.Initialize();
+    if (OperatingSystem.IsMacOS())
+        Core.Initialize(Path.Combine(AppContext.BaseDirectory, "vlc", "lib"));
+    else
+        Core.Initialize();
+
+    if (verifyRuntime)
+    {
+        using var runtime = new LibVLC("--quiet", "--ignore-config", "--no-plugins-cache", "--no-video", "--no-audio", "--no-lua");
+        Console.WriteLine($"LibVLC runtime {runtime.Version} loaded successfully.");
+        return 0;
+    }
 
     var libVlcOptions = new List<string>
     {
+        "--ignore-config",
+        "--no-plugins-cache",
         "--avcodec-hw=any",
         "--http-reconnect",
         "--http-continuous",
@@ -51,7 +65,7 @@ try
 
 
     using var mediaPlayer = new MediaPlayer(libVlc);
-    using var media = new Media(libVlc, new Uri(streamUrl));
+    using var media = new Media(libVlc, new Uri(streamUrl!));
 
     var destination = $":{port}/stream";
     // Transcode audio only. Pass through the original video track without x264 encoder. Mux as TS.

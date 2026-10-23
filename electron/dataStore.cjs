@@ -1,4 +1,8 @@
 const path = require('node:path');
+
+function resolveWorkerPath(directory = __dirname) {
+  return path.join(directory.replace(/([/\\])app\.asar(?=[/\\]|$)/, '$1app.asar.unpacked'), 'dataWorker.cjs');
+}
 const { Worker } = require('node:worker_threads');
 
 function createDataStore({ dataDir, legacyHistoryFile, legacyCacheFile }) {
@@ -13,21 +17,25 @@ function createDataStore({ dataDir, legacyHistoryFile, legacyCacheFile }) {
 
   function ensureWorker() {
     if (worker) return worker;
-    worker = new Worker(path.join(__dirname, 'dataWorker.cjs'), {
+    const currentWorker = new Worker(resolveWorkerPath(), {
       workerData: { databasePath: path.join(dataDir, 'freaky-iptv.sqlite') }
     });
-    worker.on('message', message => {
+    worker = currentWorker;
+    currentWorker.on('message', message => {
+      if (worker !== currentWorker) return;
       const request = pending.get(message.id);
       if (!request) return;
       pending.delete(message.id);
       if (message.ok) request.resolve(message.result);
       else request.reject(new Error(message.error));
     });
-    worker.on('error', error => {
+    currentWorker.on('error', error => {
+      if (worker !== currentWorker) return;
       worker = null;
       rejectPending(error);
     });
-    worker.on('exit', code => {
+    currentWorker.on('exit', code => {
+      if (worker !== currentWorker) return;
       // Reject pending requests on a clean exit too: otherwise callers hang
       // forever if the worker exits with code 0 while requests are in flight.
       rejectPending(new Error(`Data worker exited with code ${code}.`));
@@ -40,7 +48,8 @@ function createDataStore({ dataDir, legacyHistoryFile, legacyCacheFile }) {
     const id = ++sequence;
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject });
-      ensureWorker().postMessage({ id, action, payload });
+      try { ensureWorker().postMessage({ id, action, payload }); }
+      catch (error) { pending.delete(id); reject(error); }
     });
   }
 
@@ -65,4 +74,4 @@ function createDataStore({ dataDir, legacyHistoryFile, legacyCacheFile }) {
   };
 }
 
-module.exports = { createDataStore };
+module.exports = { createDataStore, resolveWorkerPath };

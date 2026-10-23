@@ -1,3 +1,5 @@
+import { translate } from './i18n';
+import { localeDateFormatter } from './localeDateFormatter';
 import type {
   AnnualReviewData,
   AvailableReview,
@@ -24,11 +26,11 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const OPENED_REVIEW_LIMIT = 128;
 const REVIEW_ID_PATTERN = /^(weekly|monthly|annual):[A-Za-z0-9._-]{1,48}$/;
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const SHORT_MONTH = localeDateFormatter({ month: 'short' });
 const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const DAY_LABEL = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-const MONTH_LABEL = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' });
-const SHORT_DATE = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+const DAY_LABEL = localeDateFormatter({ weekday: 'short', month: 'short', day: 'numeric' });
+const MONTH_LABEL = localeDateFormatter({ month: 'long', year: 'numeric' });
+const SHORT_DATE = localeDateFormatter({ month: 'short', day: 'numeric' });
 
 interface ReviewSlice {
   session: NormalizedWatchSession;
@@ -299,8 +301,8 @@ function buildAnnualReviewData(summary: ReviewSummary, slices: ReviewSlice[]): A
     equivalentDays: summary.totalWatchMs / DAY_MS,
     topChannels: buildChannelRankings(slices).slice(0, 5),
     topGroups: mapToNamedTotals(groupTotals, summary.totalWatchMs),
-    monthlyTotals: MONTH_NAMES.map((label, index) => ({ label, totalTimeMs: monthTotals[index] })),
-    weekdayTotals: WEEKDAY_NAMES.map((label, index) => ({ label, totalTimeMs: weekdayTotals[index] })),
+    monthlyTotals: monthTotals.map((totalTimeMs, index) => ({ label: SHORT_MONTH.format(new Date(2000, index, 1)), totalTimeMs })),
+    weekdayTotals: WEEKDAY_NAMES.map((label, index) => ({ label: translate(label), totalTimeMs: weekdayTotals[index] })),
     hourTotals: hourTotals.map((totalTimeMs, hour) => ({ label: formatHour(hour), totalTimeMs })),
     qualityTotals: mapToNamedTotals(qualityTotals, summary.totalWatchMs),
     streamModeTotals: mapToNamedTotals(streamModeTotals, summary.totalWatchMs),

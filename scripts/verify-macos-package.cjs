@@ -36,7 +36,7 @@ function findPackagedApps(directory) {
 }
 
 function assertArchitecture(filePath) {
-  const result = spawnSync('file', [filePath], { encoding: 'utf8' });
+  const result = spawnSync('file', ['-bL', filePath], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || `Could not inspect ${filePath}`);
   assert.match(result.stdout, expectedFileArchitecture, `${filePath} does not match ${arch}`);
 }
@@ -89,7 +89,7 @@ async function verifyStartup(appBundle) {
       // window closes. Quit the main process explicitly so the verifier does
       // not hang after a successful startup check.
       try {
-        await application.evaluate(({ app }) => app.quit());
+        await application.evaluate(({ app }) => app.exit(0));
       } catch {
         // The process may already have exited after a failed startup.
       }
@@ -119,6 +119,7 @@ async function main() {
   // lives in Electron Framework.framework beside it.
   requireFile(executable, 10 * 1024);
   requireFile(path.join(resources, 'app.asar'), 1 * 1024 * 1024);
+  requireFile(path.join(unpacked, 'electron', 'dataWorker.cjs'));
   requireFile(path.join(nativeRuntime, 'runtime.json'));
   // The self-contained .NET publish is architecture-dependent; the x64
   // helper is just under 100 KiB while arm64 is slightly larger. The
@@ -128,6 +129,15 @@ async function main() {
   assert.equal(JSON.parse(fs.readFileSync(path.join(nativeRuntime, 'runtime.json'), 'utf8')).runtime, `darwin-${arch}`);
   assertArchitecture(executable);
   assertArchitecture(helper);
+  for (const name of ['libvlc.dylib', 'libvlccore.dylib']) {
+    const library = path.join(nativeRuntime, 'libvlc-proxy', 'vlc', 'lib', name);
+    requireFile(library);
+    assertArchitecture(library);
+  }
+  if (process.arch === arch) {
+    const probe = spawnSync(helper, ['--verify-runtime'], { encoding: 'utf8', timeout: 20_000 });
+    assert.equal(probe.status, 0, probe.stderr || probe.error?.message || 'LibVLC runtime failed to load.');
+  }
   assertArchitecture(ffmpeg);
   await verifyStartup(appBundle);
   console.log(`macOS ${arch} package verified: DMG, app bundle, native runtime, FFmpeg and startup.`);

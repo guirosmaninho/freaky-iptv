@@ -56,11 +56,15 @@ jobs:
       - run: npm test
       - run: npm run lint
       - run: npm run package:mac:${{ matrix.arch }}
-      - run: npx playwright test
+      # Native fullscreen is covered on a real Mac; hosted macOS runners lack
+      # a normal interactive desktop. Keep all other UI regression checks.
+      - run: npx playwright test --grep-invert 'native fullscreen'
       - uses: actions/upload-artifact@v4
         with:
           name: release-macos-${{ matrix.arch }}
-          path: release/Freaky-IPTV-*-mac-${{ matrix.arch }}.dmg
+          path: |
+            release/Freaky-IPTV-*-mac-${{ matrix.arch }}.dmg
+            release/Freaky-IPTV-*-mac-${{ matrix.arch }}.zip
           if-no-files-found: error
 
   publish:
@@ -77,10 +81,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          cd release-artifacts
+          sha256sum * > SHA256SUMS
+          cd ..
           VERSION=$(node -p "require('./package.json').version")
           TAG="v$VERSION"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" release-artifacts/* --clobber
           else
-            gh release create "$TAG" release-artifacts/* --title "$TAG" --generate-notes
+            gh release create "$TAG" release-artifacts/* --target "${{ github.sha }}" --title "$TAG" --generate-notes
           fi

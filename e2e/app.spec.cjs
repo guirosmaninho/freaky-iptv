@@ -1,3 +1,4 @@
+const { closeTestApp } = require('./closeTestApp.cjs');
 const { test, expect, _electron: electron } = require('playwright/test');
 const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
@@ -40,6 +41,7 @@ function startFixtureServer(videoPath) {
           'Access-Control-Allow-Origin': '*'
         });
         const stream = fs.createReadStream(videoPath, { start, end, highWaterMark: 64 * 1024 });
+        response.once('close', () => stream.destroy());
         if (String(request.headers['user-agent'] || '').startsWith('VLC/')) {
           stream.on('data', chunk => {
             stream.pause();
@@ -149,10 +151,10 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   try {
-    await electronApp?.evaluate(({ app }) => app.quit());
-    await electronApp?.close();
+    await closeTestApp(electronApp);
   } finally {
-    await new Promise((resolve) => server?.close(resolve));
+    server?.closeAllConnections();
+    if (server) await new Promise(resolve => server.close(resolve));
     if (fixtureRoot) fs.rmSync(fixtureRoot, { recursive: true, force: true });
   }
 });
@@ -162,16 +164,14 @@ test('renders the main screens at supported window sizes', async () => {
   await expect(greetingHero).toBeVisible();
   await expect(greetingHero.getByRole('heading')).toBeVisible();
   await expect(greetingHero.getByRole('button')).toBeVisible();
-  const greetingLogo = greetingHero.getByRole('img', { name: 'Freaky IPTV' });
-  await expect(greetingLogo).toBeVisible();
-  await expect.poll(() => greetingLogo.evaluate((image) => image.complete && image.naturalWidth > 0)).toBe(true);
-  await expect(greetingHero.getByText('Freaky IPTV', { exact: true })).toBeVisible();
+  await expect(greetingHero.locator('.home-greeting-detail, .home-greeting-eyebrow')).toHaveCount(0);
   const greetingId = await greetingHero.getAttribute('data-greeting-id');
   expect(greetingId).toBeTruthy();
 
   for (const [width, height] of [[1024, 600], [1280, 720], [1920, 1080]]) {
     await page.setViewportSize({ width, height });
     await compareVisualSnapshot(`home-${width}x${height}.png`, { animations: 'disabled' });
+    await page.screenshot({ animations: 'disabled', path: `output/playwright/home-${width}x${height}.png` });
   }
 
   for (const [width, height] of [[760, 420], [900, 500], [1365, 520], [2560, 640]]) {
@@ -197,7 +197,7 @@ test('renders the main screens at supported window sizes', async () => {
   }
 
   await page.getByRole('button', { name: 'Live TV', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Live TV' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^Live TV/, level: 2 })).toBeVisible();
   await compareVisualSnapshot('live-tv-1920x1080.png', { animations: 'disabled' });
 
   await page.getByRole('button', { name: 'Home', exact: true }).click();
@@ -215,6 +215,7 @@ test('renders the main screens at supported window sizes', async () => {
   await playlistField.blur();
   await expect(playlistField).toHaveAttribute('type', 'password');
   await compareVisualSnapshot('settings-1920x1080.png', { animations: 'disabled', fullPage: true });
+  await page.screenshot({ animations: 'disabled', path: 'output/playwright/settings-desktop.png' });
 
   await page.getByLabel('Refresh sources every (hours)').fill('6');
   page.once('dialog', async dialog => {
@@ -233,6 +234,7 @@ test('renders the main screens at supported window sizes', async () => {
     expect(dialog.message()).toContain('cannot be undone');
     await dialog.dismiss();
   });
+  await page.getByRole('button', { name: 'Privacy', exact: true }).click();
   await page.getByRole('button', { name: 'Clear cache' }).click();
 });
 
@@ -379,6 +381,8 @@ test('zaps with arrow keys, wraps channels, and preserves full app mode', async 
 });
 
 test('enters native fullscreen and returns without losing playback', async () => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.mouse.move(640, 360);
   await page.locator('button[title="Fullscreen"]').click();
   await expect.poll(() => electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen())).toBe(true);
   await page.mouse.move(10, 10);
@@ -393,15 +397,18 @@ test('enters native fullscreen and returns without losing playback', async () =>
 });
 
 test('stopping playback exits native fullscreen before removing the player', async () => {
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('button', { name: 'Live TV', exact: true }).click();
   await page.getByRole('button', { name: 'Play News One' }).click();
   await expect(page.locator('.player-shell')).toBeVisible();
   await page.getByRole('button', { name: /Expand News One player/ }).click();
   await expect(page.locator('.player-shell')).toHaveClass(/player-shell--expanded/);
 
+  await page.mouse.move(640, 360);
   await page.locator('button[title="Fullscreen"]').click();
   await expect.poll(() => electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen())).toBe(true);
 
+  await page.mouse.move(640, 360);
   await page.locator('button[title="Stop playback"]').click();
 
   await expect.poll(() => electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen())).toBe(false);

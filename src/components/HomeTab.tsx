@@ -1,10 +1,14 @@
-import React, { memo, useCallback } from 'react';
+import React, { memo, useCallback, useMemo } from 'react';
 import type { AvailableReview, Channel, EPGProgram } from '../types';
 import type { HomeGreeting, HomeGreetingAction } from '../services/homeGreeting';
 import { ChannelCard } from './ChannelCard';
 import { ReviewBanner } from './ReviewBanner';
+import { useI18n } from '../hooks/useI18n';
+import '../navigation.css';
 
 interface HomeTabProps {
+  hasPlaylist?: boolean;
+  channels?: Channel[];
   greeting: HomeGreeting | null;
   recentChannels: Channel[];
   activeChannel: Channel | null;
@@ -21,32 +25,9 @@ interface HomeTabProps {
   onDismissReview: (review: AvailableReview) => void;
 }
 
-const renderHighlightedText = (text: string, channelName?: string, programTitle?: string) => {
-  const terms = [
-    channelName ? { text: channelName, className: 'home-greeting-channel' } : null,
-    programTitle ? { text: programTitle, className: 'home-greeting-program' } : null
-  ].filter((term): term is { text: string; className: string } => Boolean(term?.text));
-  if (terms.length === 0) return text;
-
-  const result: React.ReactNode[] = [];
-  let cursor = 0;
-  while (cursor < text.length) {
-    const next = terms
-      .map(term => ({ ...term, index: text.indexOf(term.text, cursor) }))
-      .filter(term => term.index >= 0)
-      .sort((left, right) => left.index - right.index)[0];
-    if (!next) {
-      result.push(text.slice(cursor));
-      break;
-    }
-    if (next.index > cursor) result.push(text.slice(cursor, next.index));
-    result.push(<span className={next.className} key={`${next.className}-${next.index}`}>{next.text}</span>);
-    cursor = next.index + next.text.length;
-  }
-  return result;
-};
-
 const HomeTabComponent: React.FC<HomeTabProps> = ({
+  hasPlaylist = true,
+  channels = [],
   greeting,
   recentChannels,
   activeChannel,
@@ -62,46 +43,69 @@ const HomeTabComponent: React.FC<HomeTabProps> = ({
   onOpenReview,
   onDismissReview
 }) => {
+  const { t } = useI18n();
   const isChannelFavorite = useCallback((channel: Channel) => {
     if (favoriteChannelIds.has(channel.id)) return true;
     return (channel.variants || []).some(variant => favoriteChannelIds.has(variant.id));
   }, [favoriteChannelIds]);
 
+  const favorites = useMemo(() => channels.filter(isChannelFavorite), [channels, isChannelFavorite]);
+  const liveNow = useMemo(() => {
+    const seen = new Set<string>();
+    const result: Channel[] = [];
+    for (const candidates of [favorites, recentChannels, channels]) {
+      for (const channel of candidates) {
+        if (seen.has(channel.id)) continue;
+        seen.add(channel.id);
+        if (getChannelEpgInfo(channel).program) result.push(channel);
+        if (result.length === 6) break;
+      }
+      if (result.length === 6) break;
+    }
+    return result;
+  }, [channels, favorites, getChannelEpgInfo, recentChannels]);
+
+  const renderChannel = (channel: Channel) => {
+    const { program, progress } = getChannelEpgInfo(channel);
+    const isActive = activeChannel
+      ? activeChannel.id === channel.id || (channel.variants?.some(v => v.id === activeChannel.id) ?? false)
+      : false;
+    return (
+      <ChannelCard
+        key={channel.id}
+        channel={channel}
+        isActive={isActive}
+        isFavorite={isChannelFavorite(channel)}
+        onPlay={onPlayChannel}
+        onToggleFavorite={onToggleFavorite}
+        currentProgram={program}
+        currentProgress={progress}
+        activeChannelId={activeChannel?.id}
+        qualityMappings={qualityMappings}
+      />
+    );
+  };
+
   return (
-    <div className="home-page animate-fade">
+    <div className={`home-page ${hasPlaylist ? 'home-page--ready' : 'home-page--first-run'} animate-fade`}>
       <section
         className="home-greeting-hero"
         data-greeting-id={greeting?.id}
         aria-labelledby="home-greeting-title"
-        aria-busy={!greeting}
+        aria-busy={hasPlaylist && !greeting}
       >
-        <div className="home-greeting-glow" aria-hidden="true" />
-        <div className="home-greeting-brand" data-greeting-content>
+        {!hasPlaylist && <div className="home-greeting-brand" data-greeting-content>
           <img src={`${import.meta.env.BASE_URL}cat_icon.png`} alt="Freaky IPTV" decoding="async" />
-          <span>Freaky IPTV</span>
+        </div>}
+        <div className="home-greeting-copy" data-greeting-content>
+          <h2 id="home-greeting-title">{hasPlaylist ? greeting?.highlight || t('Home') : 'Freaky IPTV'}</h2>
+          {hasPlaylist && greeting?.programTitle && <p className="home-current-program">{greeting.programTitle}</p>}
         </div>
-        <div
-          className="home-greeting-copy"
-          key={greeting ? `${greeting.id}:${greeting.headline}:${greeting.detail}` : 'loading'}
-          data-greeting-content
-        >
-          <p className="home-greeting-eyebrow">{greeting?.eyebrow || 'Welcome back'}</p>
-          <h2 id="home-greeting-title" data-greeting-content>
-            {renderHighlightedText(
-              greeting?.headline || 'Getting your lineup ready.',
-              greeting?.highlight,
-              greeting?.programTitle
-            )}
-          </h2>
-          <p className="home-greeting-detail" data-greeting-content>
-            {renderHighlightedText(
-              greeting?.detail || 'Your channels will be here in a moment.',
-              greeting?.highlight,
-              greeting?.programTitle
-            )}
-          </p>
-        </div>
-        {greeting && (
+        {!hasPlaylist ? (
+          <button type="button" className="btn-primary home-greeting-action" onClick={() => onNavigate('Settings')}>
+            {t('Add playlist')} <span aria-hidden="true">→</span>
+          </button>
+        ) : greeting && (
           <button
             type="button"
             className="btn-secondary home-greeting-action"
@@ -128,46 +132,45 @@ const HomeTabComponent: React.FC<HomeTabProps> = ({
         />
       )}
 
-      <section className="content-section">
+      {hasPlaylist && <section className="content-section home-favorites-section">
+        <div className="section-heading">
+          <div><h3>{t('Favorites')}</h3></div>
+          {favorites.length > 0 && <button type="button" className="btn-secondary" onClick={() => onNavigate('Favorites')}>{t('View all favorites')}</button>}
+        </div>
+        {favorites.length > 0 ? (
+          <div className="channel-grid channel-grid--recent">{favorites.slice(0, 6).map(renderChannel)}</div>
+        ) : (
+          <div className="home-inline-empty"><span>{t('No favorite channels yet.')}</span><button type="button" className="btn-secondary" onClick={() => onNavigate('Live')}>{t('Browse channels')}</button></div>
+        )}
+      </section>}
+
+      {hasPlaylist && liveNow.length > 0 && <section className="content-section home-now-section">
+        <div className="section-heading">
+          <div><h3>{t('Live now')}</h3></div>
+          <button type="button" className="btn-secondary" onClick={() => onNavigate('Guide')}>{t('Open TV guide')}</button>
+        </div>
+        <div className="channel-grid channel-grid--recent">{liveNow.map(renderChannel)}</div>
+      </section>}
+
+      {hasPlaylist && <section className="content-section">
         <div className="section-heading">
           <div>
-            <p className="page-eyebrow">Continue watching</p>
-            <h3>Recently viewed</h3>
+            <h3>{t('Recently viewed')}</h3>
           </div>
           <span className="section-count">{recentChannels.length}</span>
         </div>
 
         {recentChannels.length > 0 ? (
           <div className="channel-grid channel-grid--recent">
-            {recentChannels.map((channel) => {
-              const { program, progress } = getChannelEpgInfo(channel);
-              const isActive = activeChannel
-                ? activeChannel.id === channel.id || (channel.variants?.some(v => v.id === activeChannel.id) ?? false)
-                : false;
-              return (
-                <ChannelCard
-                  key={channel.id}
-                  channel={channel}
-                  isActive={isActive}
-                  isFavorite={isChannelFavorite(channel)}
-                  onPlay={onPlayChannel}
-                  onToggleFavorite={onToggleFavorite}
-                  currentProgram={program}
-                  currentProgress={progress}
-                  activeChannelId={activeChannel?.id}
-                  qualityMappings={qualityMappings}
-                />
-              );
-            })}
+            {recentChannels.map(renderChannel)}
           </div>
         ) : (
           <div className="empty-state">
-            <strong>No recent channels</strong>
-            <span>Play a channel from Live TV and it will appear here.</span>
-            <button type="button" className="btn-secondary" onClick={() => onNavigate('Live')}>Browse channels</button>
+            <strong>{t('No recent channels')}</strong>
+            <button type="button" className="btn-secondary" onClick={() => onNavigate('Live')}>{t('Browse channels')}</button>
           </div>
         )}
-      </section>
+      </section>}
     </div>
   );
 };

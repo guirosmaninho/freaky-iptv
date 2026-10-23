@@ -1,3 +1,4 @@
+import { getLocale, translate } from './i18n';
 import type { Channel, EPGProgram, WatchSession } from '../types';
 import { getChannelBaseNamePreserveCase } from './utils';
 
@@ -26,6 +27,7 @@ export interface HomeGreetingSelection {
 }
 
 export interface HomeGreetingContext {
+  locale?: string;
   now: Date;
   channels: Channel[];
   recentChannelIds: string[];
@@ -342,7 +344,7 @@ export const selectHomeGreetingTemplate = (
 };
 
 const displayChannelName = (subject: GreetingSubject | null, context: HomeGreetingContext) => {
-  if (!subject) return 'Live TV';
+  if (!subject) return translate('Live TV', context.locale || getLocale());
   return getChannelBaseNamePreserveCase(subject.channel.name, context.qualityMappings) || subject.channel.name;
 };
 
@@ -352,10 +354,11 @@ const interpolate = (
   subject: GreetingSubject | null,
   context: HomeGreetingContext
 ) =>
-  value
-    .replaceAll('{time}', periodNouns[period])
-    .replaceAll('{channel}', displayChannelName(subject, context))
-    .replaceAll('{program}', subject?.program?.title || 'Live television');
+  translate(value, context.locale || getLocale(), {
+    time: translate(periodNouns[period], context.locale || getLocale()),
+    channel: displayChannelName(subject, context),
+    program: subject?.program?.title || translate('Live television', context.locale || getLocale())
+  });
 
 const fallbackTemplate = (selection: HomeGreetingSelection) => {
   let hash = 0;
@@ -377,16 +380,16 @@ export const resolveHomeGreeting = (
   return {
     id: selection.id,
     period: selection.period,
-    eyebrow: periodLabels[selection.period],
+    eyebrow: translate(periodLabels[selection.period], context.locale || getLocale()),
     headline: interpolate(template.headline, selection.period, subject, context),
     detail: interpolate(template.detail, selection.period, subject, context),
     highlight: channelName,
     programTitle: subject?.program?.title,
     action: hasPlayableSubject && subject
-      ? { kind: 'play-channel', label: `Watch ${channelName}`, channelId: subject.channel.id }
+      ? { kind: 'play-channel', label: translate('Watch {channel}', context.locale || getLocale(), { channel: channelName || subject.channel.name }), channelId: subject.channel.id }
       : template.id.endsWith('02') || template.id.endsWith('11') || template.id.endsWith('17') || template.id.endsWith('22')
-        ? { kind: 'navigate', label: 'Open TV guide', section: 'Guide' }
-        : { kind: 'navigate', label: 'Browse live TV', section: 'Live' }
+        ? { kind: 'navigate', label: translate('Open TV guide', context.locale || getLocale()), section: 'Guide' }
+        : { kind: 'navigate', label: translate('Browse live TV', context.locale || getLocale()), section: 'Live' }
   };
 };
 

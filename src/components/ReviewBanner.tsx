@@ -1,3 +1,4 @@
+import { useI18n } from '../hooks/useI18n';
 import React, { memo } from 'react';
 import type { AvailableReview } from '../types';
 import { formatBytes, formatDuration } from '../services/statsCalculator';
@@ -10,25 +11,26 @@ interface ReviewBannerProps {
 }
 
 const LABELS = {
-  weekly: { eyebrow: 'Weekly Review', title: 'Your week in television' },
-  monthly: { eyebrow: 'Monthly Review', title: 'A month worth replaying' },
-  annual: { eyebrow: 'Year Review', title: 'Your viewing year is ready' }
+  weekly: { eyebrow: 'Weekly Review' },
+  monthly: { eyebrow: 'Monthly Review' },
+  annual: { eyebrow: 'Year Review' }
 } as const;
 
 const ReviewBannerComponent: React.FC<ReviewBannerProps> = ({ review, isOpened, onOpen, onDismiss }) => {
+  const { t, locale } = useI18n();
   const { summary } = review;
   const labels = LABELS[review.kind];
   const metrics = [
     { label: 'Watch time', value: formatDuration(summary.totalWatchMs) },
-    { label: 'Favourite channel', value: summary.favoriteChannel?.name || 'No favourite yet' },
-    { label: 'Biggest day', value: summary.busiestDayLabel || 'No active day' }
+    { label: 'Favourite channel', value: summary.favoriteChannel?.name || t('No favourite yet') },
+    { label: 'Biggest day', value: summary.busiestDayLabel || t('No active day') }
   ];
 
   if (review.kind === 'monthly') {
     metrics.push(
-      { label: 'Sessions', value: summary.sessionCount.toLocaleString() },
-      { label: 'Channels', value: summary.uniqueChannelCount.toLocaleString() },
-      { label: 'Active days', value: summary.activeDays.toLocaleString() },
+      { label: 'Sessions', value: summary.sessionCount.toLocaleString(locale) },
+      { label: 'Channels', value: summary.uniqueChannelCount.toLocaleString(locale) },
+      { label: 'Active days', value: summary.activeDays.toLocaleString(locale) },
       { label: 'Longest session', value: formatDuration(summary.longestSessionMs) }
     );
     if (summary.measuredBytes !== null) metrics.push({ label: 'Measured data', value: formatBytes(summary.measuredBytes) });
@@ -40,18 +42,17 @@ const ReviewBannerComponent: React.FC<ReviewBannerProps> = ({ review, isOpened, 
         type="button"
         className="review-banner-open"
         onClick={() => onOpen(review)}
-        aria-label={`Open ${labels.eyebrow}: ${review.period.label}`}
+        aria-label={t('Open {review}: {period}', { review: t(labels.eyebrow), period: review.period.label })}
       >
         <span className="review-banner-copy">
-          <span className="review-banner-eyebrow">{labels.eyebrow} · {review.period.label}</span>
-          <strong>{labels.title}</strong>
-          <span>{isOpened ? 'Open again' : 'Open your review'} <span aria-hidden="true">→</span></span>
+          <strong>{t(labels.eyebrow)}</strong>
+          <span>{review.period.label} <span aria-hidden="true">→</span></span>
         </span>
 
         <span className={`review-banner-metrics ${review.kind === 'monthly' ? 'review-banner-metrics--wide' : ''}`}>
           {metrics.map(metric => (
             <span className="review-banner-metric" key={metric.label}>
-              <small>{metric.label}</small>
+              <small>{t(metric.label)}</small>
               <b title={metric.value}>{metric.value}</b>
             </span>
           ))}
@@ -61,8 +62,8 @@ const ReviewBannerComponent: React.FC<ReviewBannerProps> = ({ review, isOpened, 
         type="button"
         className="review-banner-dismiss"
         onClick={() => onDismiss(review)}
-        aria-label={`Dismiss ${labels.eyebrow}: ${review.period.label}`}
-        title="Dismiss review"
+        aria-label={t('Dismiss {review}: {period}', { review: t(labels.eyebrow), period: review.period.label })}
+        title={t("Dismiss review")}
       >
         <svg
           viewBox="0 0 24 24"

@@ -13,7 +13,7 @@ describe('macOS distribution contract', () => {
         icon?: string;
         forceCodeSigning?: boolean;
         artifactName?: string;
-        target?: string;
+        target?: string[];
       };
       dmg?: {
         background?: string;
@@ -23,7 +23,7 @@ describe('macOS distribution contract', () => {
   };
 
   it('builds unsigned, architecture-specific macOS DMGs', () => {
-    assert.equal(packageJson.build.mac?.target, 'dmg');
+    assert.deepEqual(packageJson.build.mac?.target, ['dmg', 'zip']);
     assert.equal(packageJson.build.mac?.forceCodeSigning, false);
     assert.equal(packageJson.build.mac?.icon, 'build-resources/cat_icon.icns');
     assert.equal(packageJson.build.mac?.artifactName, 'Freaky-IPTV-${version}-mac-${arch}.${ext}');
@@ -37,6 +37,13 @@ describe('macOS distribution contract', () => {
     assert.match(packageJson.scripts['package:mac:x64'], /electron-builder --mac --x64/);
     assert.match(packageJson.scripts['package:mac:arm64'], /electron-builder --mac --arm64/);
     assert.match(packageJson.scripts['release:mac'], /verify:package:mac/);
+  });
+
+  it('selects architecture-matched LibVLC and preserves its library symlinks', () => {
+    assert.match(packageJson.scripts['build:libvlc-proxy:mac:x64'], /prepare-macos-libvlc\.cjs x64/);
+    assert.match(packageJson.scripts['build:libvlc-proxy:mac:arm64'], /prepare-macos-libvlc\.cjs arm64/);
+    assert.doesNotMatch(readProjectFile('libvlc-proxy-helper/LibVlcProxyHelper.csproj'), /VideoLAN\.LibVLC\.Mac/);
+    assert.match(readProjectFile('scripts/stage-native-runtime.cjs'), /verbatimSymlinks: true/);
   });
 
   it('provides an authenticated command to trigger the multi-platform release workflow', () => {

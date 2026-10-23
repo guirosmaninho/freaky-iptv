@@ -1,5 +1,6 @@
 const http = require('node:http');
 const https = require('node:https');
+const { createCompatibleConnection } = require('./httpCompatibility.cjs');
 
 function openStreamingHttpRequest(urlText, {
   allowPrivateNetwork = false,
@@ -34,6 +35,7 @@ function openStreamingHttpRequest(urlText, {
       port: parsedUrl.port || undefined,
       path: `${parsedUrl.pathname || '/'}${parsedUrl.search || ''}`,
       method: 'GET',
+      createConnection: createCompatibleConnection(parsedUrl, target, timeoutMs),
       headers: {
         'User-Agent': userAgent,
         Accept: '*/*',
@@ -51,12 +53,14 @@ function openStreamingHttpRequest(urlText, {
       const statusCode = response.statusCode || 0;
       const location = typeof response.headers.location === 'string' ? response.headers.location : undefined;
       if (statusCode >= 300 && statusCode < 400 && location) {
-        response.resume();
+        response.destroy();
         if (redirectCount >= maxRedirects) {
           reject(new Error('Too many redirects.'));
           return;
         }
-        const nextUrl = new URL(location, parsedUrl);
+        let nextUrl;
+        try { nextUrl = new URL(location, parsedUrl); }
+        catch { reject(new Error('Invalid redirect URL.')); return; }
         if (nextUrl.origin !== parsedUrl.origin) {
           nextUrl.username = '';
           nextUrl.password = '';

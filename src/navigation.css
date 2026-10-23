@@ -1,0 +1,159 @@
+.home-page .home-greeting-hero {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  min-height: 0;
+  gap: 16px;
+  padding: 20px 22px;
+}
+.home-page .home-greeting-copy { flex: 1 1 180px; animation: none; }
+.home-page .home-greeting-copy h2 {
+  width: 100%;
+  margin: 0;
+  color: var(--ui-text-primary);
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  font-size: clamp(24px, 2.6vw, 34px);
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+  animation: none;
+}
+.home-page .home-greeting-brand { animation: none; }
+.home-page .home-greeting-action { margin: 0; max-width: 100%; animation: none; }
+.home-current-program { margin-top: 6px; color: var(--ui-text-secondary); font-size: 13px; }
+.page-result-count { margin-left: 8px; color: var(--ui-text-secondary); font-size: 15px; font-weight: 500; font-variant-numeric: tabular-nums; }
+
+.home-inline-empty {
+  color: var(--ui-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.home-inline-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border: 1px dashed var(--ui-border);
+  border-radius: var(--radius-card);
+}
+
+.navigation-channel-scroll {
+  min-height: 0;
+  overflow-anchor: none;
+}
+
+.navigation-virtual-collection {
+  position: relative;
+  overflow-anchor: none;
+}
+
+.navigation-virtual-channel-item,
+.navigation-virtual-guide-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+.navigation-virtual-channel-item {
+  right: auto;
+  min-width: 0;
+}
+
+.navigation-guide .tv-guide-scroll {
+  overflow-anchor: none;
+}
+
+.navigation-guide .tv-guide-row {
+  height: 148px;
+  min-height: 148px;
+  content-visibility: visible;
+}
+
+.navigation-virtual-guide {
+  min-width: 940px;
+}
+
+.navigation-guide-play {
+  width: 100%;
+  align-self: stretch;
+  padding: 0 10px 0 0;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.navigation-guide-play .tv-guide-channel-text {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.navigation-guide-play:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 3px;
+}
+
+.navigation-guide-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.navigation-guide-filters select {
+  width: min(280px, 100%);
+}
+
+@media (max-width: 1280px) {
+  .navigation-virtual-guide { min-width: 760px; }
+}
+
+@media (max-width: 980px) {
+  .navigation-virtual-guide { min-width: 620px; }
+}
+
+@media (max-width: 760px) {
+  .home-page--ready .home-greeting-hero { grid-template-columns: minmax(0, 1fr); padding: 18px 10px; }
+  .home-page--ready .home-greeting-action { justify-self: start; max-width: 100%; }
+  .home-inline-empty { align-items: flex-start; flex-direction: column; }
+}
+
+.home-page--first-run { display: grid; place-items: center; }
+.home-page--first-run .home-greeting-hero { flex-direction: column; justify-content: center; width: min(440px, 100%); padding: 40px 24px; text-align: center; }
+.home-page--first-run .home-greeting-copy { flex: 0 1 auto; }
+.home-page--first-run .home-greeting-brand img { width: 64px; height: 64px; flex-basis: 64px; }
+.tv-guide-empty-state { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.about-grid { grid-template-columns: minmax(0, 1fr); }
+
+.navigation-guide .tv-guide-reminder-button {
+  color: var(--ui-text-secondary);
+  background: var(--ui-surface-1);
+  border: 1px solid var(--ui-border);
+  box-shadow: none;
+}
+.navigation-guide .tv-guide-reminder-button:hover,
+.navigation-guide .tv-guide-reminder-button.is-active {
+  color: var(--ui-accent);
+  background: var(--ui-selection);
+}
+
+.navigation-guide .tv-guide-search {
+  flex: 0 1 320px;
+  min-width: 160px;
+}
+.navigation-guide .tv-guide-toolbar > .field-label {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.navigation-guide .tv-guide-toolbar > .field-label select {
+  width: auto;
+}

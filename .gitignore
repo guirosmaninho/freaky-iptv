@@ -132,3 +132,5 @@ Desktop.ini
 /.agents
 /libvlc-proxy-runtime
 /.zcode
+
+output/playwright/

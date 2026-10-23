@@ -1,3 +1,4 @@
+import { useI18n } from '../hooks/useI18n';
 import React, { useEffect, useState } from 'react';
 import type { UpdateCheckResult } from '../types';
 
@@ -13,6 +14,7 @@ const INITIAL_UPDATE_STATE: UpdateCheckResult = {
 };
 
 export const AboutTab: React.FC = () => {
+  const { t } = useI18n();
   const [version, setVersion] = useState('1.0.1');
   const [update, setUpdate] = useState<UpdateCheckResult>(INITIAL_UPDATE_STATE);
   const [isUpdateBusy, setIsUpdateBusy] = useState(false);
@@ -67,19 +69,14 @@ export const AboutTab: React.FC = () => {
           decoding="async"
         />
         <h1 className="about-title">Freaky IPTV</h1>
-        <p className="about-subtitle">Experience IPTV the <span className="freaky-glow">freaky way</span>.</p>
-        <p className="about-description">
-          A desktop client for IPTV playlists with playback metrics, EPG coordination,
-          channel quality grouping, and encrypted backups.
-        </p>
       </div>
 
       <div className="about-grid">
         <div className="about-card">
-          <h2 className="about-card-title">Version Information</h2>
+          <h2 className="about-card-title">{t("Version Information")}</h2>
           <div className="about-info-rows">
             <div className="about-info-row about-version-row">
-              <span className="about-info-label">App Version</span>
+              <span className="about-info-label">{t("App Version")}</span>
               <div className="about-version-actions">
                 <span className="about-info-value version-badge">{version}</span>
                 <button
@@ -88,12 +85,12 @@ export const AboutTab: React.FC = () => {
                   onClick={updateAction.action}
                   disabled={isUpdateBusy || update.status === 'checking' || update.status === 'downloading' || update.status === 'installing'}
                 >
-                  {update.status === 'downloading' ? `Downloading ${update.progress}%` : update.status === 'installing' ? 'Installing…' : updateAction.label}
+                  {t(update.status === 'downloading' ? `Downloading ${update.progress}%` : update.status === 'installing' ? 'Installing…' : updateAction.label)}
                 </button>
               </div>
             </div>
             <div className="about-info-row">
-              <span className="about-info-label">GitHub Project</span>
+              <span className="about-info-label">{t("GitHub Project")}</span>
               <a
                 href={PROJECT_URL}
                 onClick={(event) => openExternalUrl(event, PROJECT_URL)}
@@ -108,52 +105,43 @@ export const AboutTab: React.FC = () => {
               </a>
             </div>
             <div className="about-info-row">
-              <span className="about-info-label">License</span>
-              <span className="about-info-value">MIT License</span>
+              <span className="about-info-label">{t("License")}</span>
+              <span className="about-info-value">{t("MIT License")}</span>
             </div>
           </div>
         </div>
 
-        <div className="about-card">
-          <h2 className="about-card-title">Technology Stack</h2>
-          <p className="about-card-text">
-            React, TypeScript, Electron, Vite, .NET 8, LibVLC, and FFmpeg.
-          </p>
-        </div>
+
       </div>
 
       <section className="about-card about-updates" aria-labelledby="about-updates-title">
         <div>
-          <h2 id="about-updates-title" className="about-card-title">Updates</h2>
-          <p className="about-card-text">
-            Check for new versions published on GitHub. On macOS, a new version opens GitHub Releases in your browser; on Windows, download and installation begin only after you confirm.
-          </p>
+          <h2 id="about-updates-title" className="about-card-title">{t("Updates")}</h2>
         </div>
         <div className="about-update-status" role="status" aria-live="polite">
-          {update.status === 'idle' && 'No update check has been run in this session.'}
-          {update.message && update.message}
+          {update.message && t(update.message)}
           {update.status === 'downloading' && <progress value={update.progress} max="100">{update.progress}%</progress>}
-          {update.status === 'available' && <strong>Update available: {update.version}</strong>}
-          {update.status === 'downloaded' && <strong>Update ready to install.</strong>}
+          {update.status === 'available' && <strong>{t('Update available: {version}', { version: update.version })}</strong>}
+          {update.status === 'downloaded' && <strong>{t("Update ready to install.")}</strong>}
         </div>
         {update.notes && (
           <details className="about-update-notes">
-            <summary>Release notes for {update.version}</summary>
+            <summary>{t('Release notes for {version}', { version: update.version })}</summary>
             <pre>{update.notes}</pre>
           </details>
         )}
         <div className="about-update-actions">
           {update.target === 'portable' && update.status === 'downloaded' && (
-            <span className="about-update-note">The app will close and the portable executable will be replaced in the same directory.</span>
+            <span className="about-update-note">{t("The app will close and the portable executable will be replaced in the same directory.")}</span>
           )}
           {update.target === 'release-page' && update.status === 'available' && (
-            <span className="about-update-note">Download the DMG for your Mac's processor from GitHub Releases.</span>
+            <span className="about-update-note">{t("Download the DMG for your Mac's processor from GitHub Releases.")}</span>
           )}
         </div>
       </section>
 
       <div className="about-footer">
-        <p>&copy; {new Date().getFullYear()} Freaky IPTV. Released under the MIT License.</p>
+        <p>&copy; {new Date().getFullYear()} Freaky IPTV. {t('Released under the MIT License.')}</p>
       </div>
     </div>
   );

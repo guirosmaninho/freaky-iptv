@@ -16,7 +16,7 @@ test('expands a recording inside its own card instead of inserting a duplicate p
   assert.match(source, /className=\{`recording-card-preview recording-card-preview--\$\{status\}`/);
   assert.match(source, /getRecordingThumbnail\(entry\.id\)/);
   assert.match(source, /loading="lazy"/);
-  assert.match(source, /aria-label=\{`\$\{expandedId === entry\.id \? 'Close' : 'Play'\}/);
+  assert.match(source, /aria-label=\{`\$\{t\(expandedId === entry\.id \? 'Close' : 'Play'\)\}/);
 });
 
 test('keeps the recording preview flush with the card and retries short files from the first frame', () => {
