@@ -120,7 +120,9 @@ describe('SQLite data store', () => {
 });
 
 it('resolves the SQLite worker outside ASAR without changing ordinary development paths', () => {
-  assert.equal(resolveWorkerPath('/Applications/Freaky IPTV.app/Contents/Resources/app.asar/electron'),
-    '/Applications/Freaky IPTV.app/Contents/Resources/app.asar.unpacked/electron/dataWorker.cjs');
-  assert.equal(resolveWorkerPath('/work/electron'), '/work/electron/dataWorker.cjs');
+  const resources = path.join(os.tmpdir(), 'Freaky IPTV', 'resources');
+  assert.equal(resolveWorkerPath(path.join(resources, 'app.asar', 'electron')),
+    path.join(resources, 'app.asar.unpacked', 'electron', 'dataWorker.cjs'));
+  const developmentDirectory = path.join(os.tmpdir(), 'freaky-development', 'electron');
+  assert.equal(resolveWorkerPath(developmentDirectory), path.join(developmentDirectory, 'dataWorker.cjs'));
 });
