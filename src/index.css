@@ -4770,8 +4770,9 @@ body::before,
   .liquid-sidebar,
   .hud-glass-layer,
   .player-shell--compact {
-    backdrop-filter: none;
+    /* Keep the standard property last so minification preserves both resets. */
     -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }
 

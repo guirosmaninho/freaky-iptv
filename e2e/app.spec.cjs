@@ -416,6 +416,7 @@ test('stopping playback exits native fullscreen before removing the player', asy
 });
 
 test('captures the video frame to disk and clipboard', async () => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
   await page.getByRole('button', { name: 'Live TV', exact: true }).click();
   await page.getByRole('button', { name: 'Play News One' }).click();
   await expect(page.locator('.player-shell')).toBeVisible();

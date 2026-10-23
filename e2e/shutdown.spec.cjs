@@ -60,7 +60,7 @@ for (const mode of ['normal', 'recording', 'missing-ack', 'dirty-cancel']) {
                 app.quit();
               });
               await window.webContents.executeJavaScript(\`(async () => {
-                [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Settings').click();
+                document.querySelector('button[aria-label="Settings"]').click();
                 await new Promise(resolve => {
                   const ready = () => document.querySelector('#settings-playlist-url');
                   if (ready()) return resolve();
@@ -97,8 +97,13 @@ for (const mode of ['normal', 'recording', 'missing-ack', 'dirty-cancel']) {
         expect(fs.existsSync(path.join(root, 'store-usable'))).toBe(true);
       }
     } finally {
-      if (child?.exitCode === null && child?.signalCode === null) child.kill('SIGKILL');
-      fs.rmSync(root, { recursive: true, force: true });
+      if (child?.exitCode === null && child?.signalCode === null) {
+        await new Promise(resolve => {
+          child.once('exit', resolve);
+          child.kill('SIGKILL');
+        });
+      }
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
 }

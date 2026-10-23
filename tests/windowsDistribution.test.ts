@@ -146,6 +146,10 @@ describe('Windows distribution contract', () => {
       );
       assert.match(productionCss, /(?:^|[;}])backdrop-filter:/);
       assert.match(productionCss, /(?:^|[;}])-webkit-backdrop-filter:/);
+      const reducedTransparency = productionCss.match(/@media\s*\(prefers-reduced-transparency\s*:\s*reduce\)\s*\{([^}]+})/);
+      assert.ok(reducedTransparency, 'Expected the reduced-transparency override');
+      assert.match(reducedTransparency[1], /(?:^|[;{}])backdrop-filter:none/);
+      assert.match(reducedTransparency[1], /(?:^|[;{}])-webkit-backdrop-filter:none/);
     } finally {
       rmSync(outputDirectory, { recursive: true, force: true });
     }
