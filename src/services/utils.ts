@@ -134,7 +134,7 @@ const MODIFIER_CHARACTER_MAP: Record<string, string> = {
 
 const DEFAULT_QUALITY_MAPPINGS: Record<string, string> = {
   '4K': '4k, 2160p, uhd',
-  'FHD': 'fhd, 1080p, 1080',
+  'FHD': 'fhd, full hd, fullhd, 1080p, 1080',
   'HEVC': 'hevc, h265, h.265',
   'HD': 'hd, 720p, 720',
   'SD': 'sd, 576p, 480p, 576, 480',
@@ -169,7 +169,7 @@ const matcherCacheKey = (mappings?: Record<string, string>) => {
 };
 
 const compileBoundaryMatcher = (keyword: string, flags = '') =>
-  new RegExp(`(?:^|[^a-zA-Z0-9])${escapeRegExp(keyword)}(?=$|[^a-zA-Z0-9])`, flags);
+  new RegExp(`(?<![a-zA-Z0-9])${escapeRegExp(keyword)}(?=$|[^a-zA-Z0-9])`, flags);
 
 const getCompiledQualityMatchers = (mappings?: Record<string, string>): CompiledQualityMatchers => {
   const cacheKey = matcherCacheKey(mappings);
@@ -190,10 +190,7 @@ const getCompiledQualityMatchers = (mappings?: Record<string, string>): Compiled
 
   const activeMappings = { ...DEFAULT_QUALITY_MAPPINGS, ...(mappings || {}) };
   const compiled = {
-    stripMatchers: [
-      /\[|\]|\(|\)|-|\+|\|/g,
-      ...Array.from(stripKeywords, keyword => compileBoundaryMatcher(keyword, 'gi'))
-    ],
+    stripMatchers: Array.from(stripKeywords, keyword => compileBoundaryMatcher(keyword, 'gi')),
     labelMatchers: QUALITY_ORDER.map(label => ({
       label,
       matchers: (activeMappings[label] || '')
@@ -226,10 +223,18 @@ function normalizeChannelQualityText(name: string): string {
 
 export function getChannelBaseName(name: string, mappings?: Record<string, string>): string {
   if (!name) return '';
-  let clean = normalizeChannelQualityText(name);
+  const clean = normalizeChannelQualityText(name);
 
+  return stripQualityLabels(clean, mappings);
+}
+
+function stripQualityLabels(name: string, mappings?: Record<string, string>): string {
+  let clean = name;
   for (const matcher of getCompiledQualityMatchers(mappings).stripMatchers) {
     clean = clean.replace(matcher, ' ');
+  }
+  if (clean !== name) {
+    clean = clean.replace(/\(\s*\)|\[\s*\]/g, ' ').replace(/[-|]\s*$/, ' ');
   }
   return clean.replace(/\s+/g, ' ').trim();
 }
@@ -238,7 +243,7 @@ export function getChannelBaseNamePreserveCase(name: string, mappings?: Record<s
   if (!name) return '';
   
   // 1. Normalize modifier characters
-  const cleanModifiers = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const cleanModifiers = name.normalize('NFC');
   let mapped = '';
   for (let i = 0; i < cleanModifiers.length; i++) {
     const char = cleanModifiers[i];
@@ -246,13 +251,9 @@ export function getChannelBaseNamePreserveCase(name: string, mappings?: Record<s
   }
   
   // 2. Remove country prefixes like "PT:", "ES -", "PT - ", "PT |" case-insensitively
-  let clean = mapped.replace(/^[a-zA-Z]{2}\s*[:|-]\s*/, '').trim();
+  const clean = mapped.replace(/^[a-zA-Z]{2}\s*[:|-]\s*/, '').trim();
 
-  for (const matcher of getCompiledQualityMatchers(mappings).stripMatchers) {
-    clean = clean.replace(matcher, ' ');
-  }
-
-  return clean.replace(/\s+/g, ' ').trim();
+  return stripQualityLabels(clean, mappings);
 }
 
 export function getChannelQualityLabel(name: string, mappings?: Record<string, string>): string {

@@ -22,13 +22,13 @@ async function seedLargePlaylist() {
   const playlistUrl = 'https://navigation.example.test/channels.m3u';
   const now = Date.now();
   const channels = Array.from({ length: 400 }, (_, index) => ({
-    id: `navigation-${index}`, tvgId: `navigation-${index}`, name: `Channel ${String(index).padStart(3, '0')}`,
+    id: `navigation-${index}`, tvgId: `navigation-${index}`, name: index === 399 ? 'RTP Acores' : `Channel ${String(index).padStart(3, '0')}`,
     groupTitle: index % 2 ? 'Sports' : 'General', streamUrl: `https://navigation.example.test/stream?channel=${index}`, logoUrl: '', duration: -1, attributes: {}
   }));
   const programs = channels.flatMap(channel => [0, 1].map(slot => ({
-    channelId: channel.id, title: `${slot ? 'Next' : 'Current'} ${channel.name}`, subTitle: '', description: '', category: '', iconUrl: '',
+    channelId: channel.id, title: channel.id === 'navigation-399' ? (slot ? 'Próxima emissão' : 'Notícias do Atlântico') : `${slot ? 'Next' : 'Current'} ${channel.name}`, subTitle: '', description: '', category: '', iconUrl: '',
     startUtc: new Date(now + (slot ? 60 : -60) * 60000).toISOString(),
-    stopUtc: new Date(now + (slot ? 120 : 60) * 60000).toISOString(), rawStart: '', rawStop: ''
+    stopUtc: new Date(now + (slot ? 120 : channel.id === 'navigation-398' ? 70 : 60) * 60000).toISOString(), rawStart: '', rawStop: ''
   })));
   const cache = {
     schemaVersion: 1, playlistUrlHash: createHash('sha256').update(playlistUrl).digest('hex').slice(0, 16),
@@ -40,7 +40,7 @@ async function seedLargePlaylist() {
     localStorage.clear();
     await window.electron.saveSettings(nextSettings);
     await window.electron.saveCache(cacheSnapshot);
-  }, { nextSettings: { ...settings, playlistUrl, favoriteChannelIds: channels.slice(0, 200).map(channel => channel.id) }, cacheSnapshot: cache });
+  }, { nextSettings: { ...settings, playlistUrl, favoriteChannelIds: [...channels.slice(0, 200), channels[399]].map(channel => channel.id) }, cacheSnapshot: cache });
   await page.reload();
   await expect(page.locator('.home-greeting-hero')).toBeVisible();
 }
@@ -72,6 +72,53 @@ test('offers playlist setup before channels have been configured', async () => {
   await seedLargePlaylist();
   await expect(page.getByRole('button', { name: 'View all favorites', exact: true })).toBeVisible();
   await expect(page.locator('.home-now-section')).toBeVisible();
+});
+
+test('matches channel and programme searches regardless of accents', async () => {
+  await seedLargePlaylist();
+  await page.getByRole('button', { name: 'Live TV', exact: true }).click();
+  const liveSearch = page.getByRole('searchbox', { name: 'Search channels or programmes', exact: true });
+  await liveSearch.fill('RTP Açores');
+  await expect(page.locator('.channel-card')).toHaveCount(1);
+  await expect(page.locator('.channel-card')).toContainText('RTP Acores');
+  await liveSearch.fill('no-such-channel');
+  await expect(page.locator('.channel-card')).toHaveCount(0);
+  await liveSearch.fill('noticias do atlantico');
+  await expect(page.locator('.channel-card')).toHaveCount(1);
+  await expect(page.locator('.channel-card')).toContainText('RTP Acores');
+  await liveSearch.fill('');
+
+  await page.getByRole('button', { name: 'Favorites', exact: true }).click();
+  await expect(page.getByRole('heading', { name: /^Favorites/, level: 2 })).toBeVisible();
+  const favoritesSearch = page.getByRole('searchbox', { name: 'Search channels or programmes', exact: true });
+  await favoritesSearch.fill('RTP Açores');
+  await expect(page.locator('.channel-card')).toHaveCount(1);
+  await favoritesSearch.fill('');
+
+  await page.getByRole('button', { name: 'TV Guide', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'TV Guide', exact: true, level: 2 })).toBeVisible();
+  const guideSearch = page.getByRole('searchbox', { name: 'Search TV guide channels or programmes', exact: true });
+  await guideSearch.fill('RTP Açores');
+  await expect(page.locator('.tv-guide-row')).toHaveCount(1);
+  await expect(page.locator('.tv-guide-row')).toContainText('RTP Acores');
+  await guideSearch.fill('no-such-channel');
+  await expect(page.locator('.tv-guide-row')).toHaveCount(0);
+  await guideSearch.fill('proxima emissao');
+  await expect(page.locator('.tv-guide-row')).toHaveCount(1);
+  await expect(page.locator('.tv-guide-row')).toContainText('RTP Acores');
+  await guideSearch.fill('');
+});
+
+test('flags overlapping source times while leaving adjacent schedules unmarked', async () => {
+  await page.getByRole('button', { name: 'TV Guide', exact: true }).click();
+  const search = page.getByRole('searchbox', { name: 'Search TV guide channels or programmes', exact: true });
+  await search.fill('Channel 398');
+  await expect(page.locator('.tv-guide-row')).toHaveCount(1);
+  await expect(page.locator('.tv-guide-row')).toContainText('Schedule overlap');
+  await search.fill('Channel 397');
+  await expect(page.locator('.tv-guide-row')).toHaveCount(1);
+  await expect(page.locator('.tv-guide-row')).not.toContainText('Schedule overlap');
+  await search.fill('');
 });
 
 test('restores independent tab filters, position and density with bounded channel DOM', async () => {

@@ -424,6 +424,16 @@ body::before {
   font-style: italic;
 }
 
+.tv-guide-empty--ambiguous {
+  white-space: normal;
+}
+
+.tv-guide-overlap {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  line-height: 1.2;
+}
+
 .tv-guide-progress {
   display: block;
   width: min(210px, 80%);
@@ -1263,6 +1273,13 @@ select:focus-visible {
   background: rgba(255, 255, 255, 0.06);
 }
 
+.zap-overlay-placeholder {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  font-weight: 700;
+}
+
 .zap-overlay div:last-child {
   display: grid;
   min-width: 0;
@@ -2056,6 +2073,13 @@ select:focus-visible {
   position: relative;
   display: flex;
   align-items: center;
+}
+
+/* The compact title normally clips long text, but must not clip its quality menu. */
+.player-shell--compact:has(.player-quality-popover),
+.compact-details:has(.player-quality-popover),
+.compact-title-row:has(.player-quality-popover) {
+  overflow: visible;
 }
 
 .player-quality-button {

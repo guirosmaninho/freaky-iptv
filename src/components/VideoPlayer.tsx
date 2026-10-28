@@ -25,7 +25,7 @@ import {
   HLS_QUALITY_CONFIG
 } from '../services/playbackStartupPolicy';
 import type { PlaybackEngine, PlaybackStartupProfile, PlaybackStreamKind } from '../services/playbackStartupPolicy';
-import { getChannelQualityLabel } from '../services/utils';
+import { getChannelBaseNamePreserveCase, getChannelQualityLabel } from '../services/utils';
 
 import type { AdaptiveBufferLevel, Channel, EPGProgram, PlaybackAttempt, PlaybackFailure, PlaybackSessionEvent, PlaybackStatus, RecordingState } from '../types';
 
@@ -1702,6 +1702,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   );
 
   const networkHistoryPeak = Math.max(1, ...stats.networkHistory);
+  const displayChannelName = getChannelBaseNamePreserveCase(channel.name, qualityMappings) || channel.name;
 
   return (
     <div 
@@ -1720,7 +1721,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         preload="auto"
         className={`player-video ${isImmersive ? 'player-video--immersive' : 'player-video--compact'}`}
         tabIndex={0}
-        aria-label={t('{channel} live video', { channel: channel.name })}
+        aria-label={t('{channel} live video', { channel: displayChannelName })}
         onClick={isImmersive ? revealImmersiveControls : toggleExpanded}
         onKeyDown={(event) => {
           if (event.key !== ' ' && event.key !== 'Enter') return;
@@ -1737,7 +1738,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           className="player-preview-spacer"
           onClick={toggleExpanded}
           title={t("Expand player inside app")}
-          aria-label={t('Expand {channel} player', { channel: channel.name })}
+          aria-label={t('Expand {channel} player', { channel: displayChannelName })}
         />
       )}
 
@@ -1821,7 +1822,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <div className="hud-channel">
             <div className="hud-title-row">
               <h4 className="hud-title">
-                {channel.name}
+                {displayChannelName}
               </h4>
               {renderQualitySelector('immersive')}
             </div>
@@ -1938,7 +1939,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <div className="compact-details">
             <div className="compact-title-row">
               <span className="compact-channel">
-                {channel.name}
+                {displayChannelName}
               </span>
               {renderQualitySelector('compact')}
               <span className="compact-separator">{t("|")}</span>

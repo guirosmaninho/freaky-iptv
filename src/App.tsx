@@ -10,10 +10,12 @@ import { downloadAndParseEPG } from './services/epgDownload';
 import { computeStats } from './services/statsCalculator';
 import type { ComputedStats } from './services/statsCalculator';
 import { EMPTY_CHANNEL_EPG_INFO, getEpgInfoFromPrograms, createChannelEpgReader } from './services/epgSchedule';
-import { sha256Short, getChannelBaseName, getChannelBaseNamePreserveCase, getChannelQualityLabel, getQualityScore, normalizeKey } from './services/utils';
+import { buildChannelProgramLookup } from './services/channelEpgLookup';
+import { sha256Short, getChannelBaseName, getChannelBaseNamePreserveCase, getChannelQualityLabel, getQualityScore } from './services/utils';
 import { DEFAULT_APP_BEHAVIOUR, DEFAULT_QUALITY_MAPPINGS, normalizeQualityMappings, validateSourceUrl } from './services/settingsValidation';
 import { getRelativeChannelIndex, isEditableShortcutTarget, nextVolume } from './services/channelNavigation';
 import { collapseExactUrlDuplicates } from './services/duplicateDetection';
+import { getChannelInitials, isUsableChannelLogo } from './services/channelArtwork';
 import { appendOpenedReviewId, computeAvailableReviews, getDisplayReview, normalizeOpenedReviewIds } from './services/reviewCalculator';
 import {
   loadGreetingHistory,
@@ -33,8 +35,6 @@ type RefreshSourcesInternal = (
   targetQualityMappings?: Record<string, string>,
   options?: { persistSettings?: boolean }
 ) => Promise<void>;
-
-const EMPTY_UPCOMING: EPGProgram[] = [];
 
 const LiveGrid = lazy(() => import('./components/LiveGrid').then(module => ({ default: module.LiveGrid })));
 const TvGuideTab = lazy(() => import('./components/TvGuideTab').then(module => ({ default: module.TvGuideTab })));
@@ -87,50 +87,6 @@ const countEpgPrograms = (programsByChannel: Record<string, EPGProgram[]>) => {
     count += list.length;
   }
   return count;
-};
-
-const resolveProgramsForChannel = (channel: Channel, guide: EpgGuide): EPGProgram[] => {
-  const candidateIds = new Set<string>();
-  if (channel.tvgId) candidateIds.add(channel.tvgId);
-  for (const variant of channel.variants || []) {
-    if (variant.tvgId) candidateIds.add(variant.tvgId);
-  }
-
-  for (const id of candidateIds) {
-    const programs = guide.programsByChannel[id];
-    if (programs) return programs;
-  }
-
-  const candidateNames = new Set<string>();
-  if (channel.name) candidateNames.add(channel.name);
-  for (const variant of channel.variants || []) {
-    if (variant.name) candidateNames.add(variant.name);
-  }
-
-  for (const name of candidateNames) {
-    const guideChannelId = guide.normalizedNames[normalizeKey(name)];
-    if (!guideChannelId) continue;
-
-    const programs = guide.programsByChannel[guideChannelId];
-    if (programs) return programs;
-  }
-
-  return EMPTY_UPCOMING;
-};
-
-const buildChannelProgramLookup = (channelList: Channel[], guide: EpgGuide) => {
-  const lookup = new Map<string, EPGProgram[]>();
-
-  for (const channel of channelList) {
-    const programs = resolveProgramsForChannel(channel, guide);
-    lookup.set(channel.id, programs);
-
-    for (const variant of channel.variants || []) {
-      lookup.set(variant.id, programs);
-    }
-  }
-
-  return lookup;
 };
 
 const buildPlayableChannelIndex = (channelList: Channel[]) => {
@@ -366,8 +322,8 @@ export const App: React.FC = () => {
   }, [appearance]);
 
   const channelProgramLookup = useMemo(
-    () => buildChannelProgramLookup(channels, epgGuide),
-    [channels, epgGuide]
+    () => buildChannelProgramLookup(channels, epgGuide, qualityMappings),
+    [channels, epgGuide, qualityMappings]
   );
 
   const playableChannelIndex = useMemo(
@@ -396,7 +352,12 @@ export const App: React.FC = () => {
   }, [playableChannelIndex, recentChannelIds]);
 
   const getChannelEpgInfo = useMemo(
-    () => createChannelEpgReader(channelProgramLookup, epgTickMs),
+    () => {
+      const read = createChannelEpgReader(channelProgramLookup.programs, epgTickMs);
+      return (channel: Channel) => channelProgramLookup.ambiguousIds.has(channel.id)
+        ? { ...EMPTY_CHANNEL_EPG_INFO, ambiguous: true }
+        : read(channel);
+    },
     [channelProgramLookup, epgTickMs]
   );
 
@@ -602,6 +563,7 @@ export const App: React.FC = () => {
         setWatchHistory(retainedHistory);
 
         const greetingNow = new Date();
+        const greetingProgramLookup = buildChannelProgramLookup(loadedChannels, loadedGuide, mappings);
         const greetingContext: HomeGreetingContext = {
           now: greetingNow,
           channels: loadedChannels,
@@ -610,7 +572,7 @@ export const App: React.FC = () => {
           watchHistory: retainedHistory,
           qualityMappings: mappings,
           getCurrentProgram: channel => getEpgInfoFromPrograms(
-            resolveProgramsForChannel(channel, loadedGuide),
+            greetingProgramLookup.programs.get(channel.id),
             greetingNow.getTime()
           ).program
         };
@@ -1472,6 +1434,7 @@ export const App: React.FC = () => {
           <TvGuideTab
             onNavigate={handleNavigate}
             channels={channels}
+            qualityMappings={qualityMappings}
             onPlayChannel={playChannel}
             getChannelEpgInfo={getChannelEpgInfo}
             reminders={reminders}
@@ -1611,10 +1574,10 @@ export const App: React.FC = () => {
         )}
         {zapPreview && (
           <div className="zap-overlay" role="status" aria-live="polite">
-            {zapPreview.logoUrl ? <img src={zapPreview.logoUrl} alt="" /> : <div className="zap-overlay-placeholder" />}
+            {isUsableChannelLogo(zapPreview.logoUrl) ? <img src={zapPreview.logoUrl} alt="" /> : <div className="zap-overlay-placeholder" aria-hidden="true">{getChannelInitials(zapPreview.name)}</div>}
             <div>
               <span>{getChannelQualityLabel(zapPreview.name, qualityMappings)}</span>
-              <strong>{zapPreview.name}</strong>
+              <strong>{getChannelBaseNamePreserveCase(zapPreview.name, qualityMappings) || zapPreview.name}</strong>
               <small>{getChannelEpgInfo(zapPreview).program?.title || 'Live TV'}</small>
             </div>
           </div>

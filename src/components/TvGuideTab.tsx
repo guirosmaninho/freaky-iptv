@@ -1,56 +1,54 @@
 import { formatProgrammeTime as formatTime } from '../services/programmeTime';
+import { getUpcomingOverlapFlags } from '../services/epgSchedule';
 import React, { memo, useCallback, useDeferredValue, useMemo, useState } from 'react';
 import type { Channel, EPGProgram, Reminder } from '../types';
 import { useI18n } from '../hooks/useI18n';
 import { useNavigationState } from '../hooks/useNavigationState';
 import { useVirtualCollection } from '../hooks/useVirtualCollection';
+import { normalizeSearchText } from '../services/searchText';
+import { getChannelBaseNamePreserveCase } from '../services/utils';
+import { getChannelInitials, isUsableChannelLogo } from '../services/channelArtwork';
 import '../navigation.css';
 
 interface TvGuideTabProps {
   channels: Channel[];
+  qualityMappings?: Record<string, string>;
   onNavigate: (section: string) => void;
   onPlayChannel: (channel: Channel) => void;
-  getChannelEpgInfo: (channel: Channel) => { program: EPGProgram | null; progress: number; upcoming: EPGProgram[] };
+  getChannelEpgInfo: (channel: Channel) => { program: EPGProgram | null; progress: number; upcoming: EPGProgram[]; ambiguous?: boolean };
   reminders: Reminder[];
   onToggleReminder: (channel: Channel, programme: EPGProgram, leadMinutes: Reminder['leadMinutes']) => void;
 }
 
-const getInitials = (name: string) => {
-  return name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map(part => part[0])
-    .join('')
-    .toUpperCase() || 'TV';
-};
-
-
-
 interface TvGuideRowProps {
   channel: Channel;
+  qualityMappings?: Record<string, string>;
   onPlayChannel: (channel: Channel) => void;
   logoFailed: boolean;
   onLogoError: (channelId: string) => void;
   program: EPGProgram | null;
   progress: number;
   upcoming: EPGProgram[];
+  ambiguous?: boolean;
   reminders: Reminder[];
   onToggleReminder: (channel: Channel, programme: EPGProgram) => void;
 }
 
 const TvGuideRowComponent: React.FC<TvGuideRowProps> = ({
   channel,
+  qualityMappings,
   onPlayChannel,
   logoFailed,
   onLogoError,
   program,
   progress,
   upcoming,
+  ambiguous,
   reminders,
   onToggleReminder
 }) => {
   const { t, locale } = useI18n();
+  const displayName = getChannelBaseNamePreserveCase(channel.name, qualityMappings) || channel.name;
   const reminderId = (programme: EPGProgram) => `${channel.id}\u0000${programme.startUtc}`;
   const reminderButton = (programme: EPGProgram) => {
     const isReminderSet = reminders.some(reminder => reminder.id === reminderId(programme));
@@ -67,7 +65,8 @@ const TvGuideRowComponent: React.FC<TvGuideRowProps> = ({
       </button>
     );
   };
-  const renderUpcomingCell = (upcomingProgram: EPGProgram | undefined, label: string, className = '') => (
+  const overlapFlags = getUpcomingOverlapFlags(program, upcoming);
+  const renderUpcomingCell = (upcomingProgram: EPGProgram | undefined, label: string, overlaps: boolean, className = '') => (
     <div className={`tv-guide-cell tv-guide-upcoming ${className}`}>
       {upcomingProgram ? (
         <>
@@ -78,6 +77,9 @@ const TvGuideRowComponent: React.FC<TvGuideRowProps> = ({
           <span className="tv-guide-program-time">
             {formatTime(upcomingProgram.startUtc, locale)} - {formatTime(upcomingProgram.stopUtc, locale)}
           </span>
+          {overlaps && <span className="tv-guide-overlap" title={t('The source provides overlapping programme times.')}>
+            {t('Schedule overlap')}
+          </span>}
           {reminderButton(upcomingProgram)}
         </>
       ) : (
@@ -94,11 +96,11 @@ const TvGuideRowComponent: React.FC<TvGuideRowProps> = ({
       <button
         type="button"
         className="tv-guide-channel navigation-guide-play"
-        aria-label={t('Play {channel}', { channel: channel.name })}
+        aria-label={t('Play {channel}', { channel: displayName })}
         onClick={(event) => { event.stopPropagation(); onPlayChannel(channel); }}
       >
         <div className="tv-guide-logo">
-          {channel.logoUrl && !logoFailed ? (
+          {isUsableChannelLogo(channel.logoUrl) && !logoFailed ? (
             <img
               src={channel.logoUrl}
               alt=""
@@ -107,13 +109,13 @@ const TvGuideRowComponent: React.FC<TvGuideRowProps> = ({
               onError={() => onLogoError(channel.id)}
             />
           ) : (
-            <span>{getInitials(channel.name)}</span>
+            <span>{getChannelInitials(channel.name)}</span>
           )}
         </div>
 
         <div className="tv-guide-channel-text">
-          <span className="tv-guide-channel-name" title={channel.name}>
-            {channel.name}
+          <span className="tv-guide-channel-name" title={displayName}>
+            {displayName}
           </span>
         </div>
       </button>
@@ -133,13 +135,13 @@ const TvGuideRowComponent: React.FC<TvGuideRowProps> = ({
             {reminderButton(program)}
           </>
         ) : (
-          <span className="tv-guide-empty">{t('No schedule available')}</span>
+          <span className={`tv-guide-empty${ambiguous ? ' tv-guide-empty--ambiguous' : ''}`}>{t(ambiguous ? 'Schedule unavailable: ambiguous channel identifier' : 'No schedule available')}</span>
         )}
       </div>
 
-      {renderUpcomingCell(upcoming[0], t('Next'))}
-      {renderUpcomingCell(upcoming[1], t('Later'), 'tv-guide-later-2')}
-      {renderUpcomingCell(upcoming[2], t('Later'), 'tv-guide-later-3')}
+      {renderUpcomingCell(upcoming[0], t('Next'), overlapFlags[0])}
+      {renderUpcomingCell(upcoming[1], t('Later'), overlapFlags[1], 'tv-guide-later-2')}
+      {renderUpcomingCell(upcoming[2], t('Later'), overlapFlags[2], 'tv-guide-later-3')}
     </div>
   );
 };
@@ -155,12 +157,14 @@ const areUpcomingEqual = (a: EPGProgram[], b: EPGProgram[]) => {
 const TvGuideRow = memo(TvGuideRowComponent, (prevProps, nextProps) => {
   return (
     prevProps.logoFailed === nextProps.logoFailed &&
+    prevProps.ambiguous === nextProps.ambiguous &&
     prevProps.program === nextProps.program &&
     Math.round(prevProps.progress) === Math.round(nextProps.progress) &&
     prevProps.channel.id === nextProps.channel.id &&
     prevProps.channel.name === nextProps.channel.name &&
     prevProps.channel.logoUrl === nextProps.channel.logoUrl &&
     prevProps.channel.groupTitle === nextProps.channel.groupTitle &&
+    prevProps.qualityMappings === nextProps.qualityMappings &&
     prevProps.reminders === nextProps.reminders &&
     prevProps.onPlayChannel === nextProps.onPlayChannel &&
     prevProps.onLogoError === nextProps.onLogoError &&
@@ -171,6 +175,7 @@ const TvGuideRow = memo(TvGuideRowComponent, (prevProps, nextProps) => {
 
 const TvGuideTabComponent: React.FC<TvGuideTabProps> = ({
   channels,
+  qualityMappings,
   onPlayChannel,
   onNavigate,
   getChannelEpgInfo,
@@ -185,7 +190,7 @@ const TvGuideTabComponent: React.FC<TvGuideTabProps> = ({
   const effectiveSelectedCategory = categories.includes(selectedCategory) ? selectedCategory : 'All channels';
   const deferredSearchText = useDeferredValue(searchText);
   const normalizedSearchText = useMemo(
-    () => deferredSearchText.toLowerCase().trim(),
+    () => normalizeSearchText(deferredSearchText.trim()),
     [deferredSearchText]
   );
 
@@ -206,12 +211,12 @@ const TvGuideTabComponent: React.FC<TvGuideTabProps> = ({
     return channels.filter(channel => {
       if (effectiveSelectedCategory !== 'All channels' && channel.groupTitle !== effectiveSelectedCategory) return false;
       if (!normalizedSearchText) return true;
-      const nameMatch = channel.name.toLowerCase().includes(normalizedSearchText);
+      const nameMatch = normalizeSearchText(channel.name).includes(normalizedSearchText);
       if (nameMatch) return true;
 
       const epg = getChannelEpgInfo(channel);
-      const activeMatch = epg.program?.title?.toLowerCase().includes(normalizedSearchText) || false;
-      const upcomingMatch = epg.upcoming?.some(prog => prog.title.toLowerCase().includes(normalizedSearchText)) || false;
+      const activeMatch = epg.program?.title ? normalizeSearchText(epg.program.title).includes(normalizedSearchText) : false;
+      const upcomingMatch = epg.upcoming?.some(prog => normalizeSearchText(prog.title).includes(normalizedSearchText)) || false;
       return activeMatch || upcomingMatch;
     });
   }, [channels, getChannelEpgInfo, normalizedSearchText, effectiveSelectedCategory]);
@@ -226,7 +231,7 @@ const TvGuideTabComponent: React.FC<TvGuideTabProps> = ({
   });
 
   const renderRow = (channel: Channel, index: number, top?: number) => {
-    const { program, progress, upcoming } = getChannelEpgInfo(channel);
+    const { program, progress, upcoming, ambiguous } = getChannelEpgInfo(channel);
     return (
       <div
         key={channel.id}
@@ -239,12 +244,14 @@ const TvGuideTabComponent: React.FC<TvGuideTabProps> = ({
       >
         <TvGuideRow
           channel={channel}
+          qualityMappings={qualityMappings}
           onPlayChannel={onPlayChannel}
           logoFailed={Boolean(logoFailedMap[channel.id])}
           onLogoError={handleLogoError}
           program={program}
           progress={progress}
           upcoming={upcoming}
+          ambiguous={ambiguous}
           reminders={reminders}
           onToggleReminder={handleRowToggleReminder}
         />

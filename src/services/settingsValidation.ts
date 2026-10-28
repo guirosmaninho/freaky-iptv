@@ -16,7 +16,7 @@ const SENSITIVE_QUERY_KEYS = new Set([
 
 export const DEFAULT_QUALITY_MAPPINGS: Record<string, string> = {
   '4K': '4k, 2160p, uhd',
-  'FHD': 'fhd, 1080p, 1080',
+  'FHD': 'fhd, full hd, fullhd, 1080p, 1080',
   'HEVC': 'hevc, h265, h.265',
   'HD': 'hd, 720p, 720',
   'SD': 'sd, 576p, 480p, 576, 480',
@@ -88,6 +88,11 @@ export function normalizeQualityMappings(input: Record<string, string>): Record<
       .map(part => part.trim())
       .filter(Boolean)
       .join(', ');
+
+    // Upgrade the previously shipped defaults while preserving custom labels.
+    if (key === 'FHD' && normalized[key].toLowerCase() === 'fhd, 1080p, 1080') {
+      normalized[key] = DEFAULT_QUALITY_MAPPINGS.FHD;
+    }
   }
 
   return normalized;

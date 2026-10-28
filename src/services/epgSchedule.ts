@@ -7,6 +7,16 @@ export type ChannelEpgInfo = {
   nextChangeAtMs: number | null;
 };
 
+export function getUpcomingOverlapFlags(current: EPGProgram | null, upcoming: EPGProgram[]): boolean[] {
+  let latestStopMs = current ? getProgramTimes(current).stopMs : Number.NEGATIVE_INFINITY;
+  return upcoming.map(program => {
+    const { startMs, stopMs } = getProgramTimes(program);
+    const overlaps = startMs < latestStopMs;
+    latestStopMs = Math.max(latestStopMs, stopMs);
+    return overlaps;
+  });
+}
+
 type ProgramTimeRange = {
   startMs: number;
   stopMs: number;
@@ -128,7 +138,6 @@ export const getEpgInfoFromPrograms = (
   }
 
   const nextProgramIndex = findNextProgramIndex(programs, nowMs);
-  const upcomingStartIndex = activeIndex >= 0 ? activeIndex + 1 : nextProgramIndex;
   const nextStartMs = nextProgramIndex < programs.length
     ? getProgramTimes(programs[nextProgramIndex]).startMs
     : Number.POSITIVE_INFINITY;
@@ -140,7 +149,7 @@ export const getEpgInfoFromPrograms = (
   return {
     program: activeProgram,
     progress,
-    upcoming: programs.slice(upcomingStartIndex, upcomingStartIndex + 3),
+    upcoming: programs.slice(nextProgramIndex, nextProgramIndex + 3),
     nextChangeAtMs: Number.isFinite(nextChangeAtMs) ? nextChangeAtMs : null
   };
 };

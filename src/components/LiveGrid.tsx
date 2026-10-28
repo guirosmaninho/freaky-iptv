@@ -4,6 +4,7 @@ import { ChannelCard } from './ChannelCard';
 import { useI18n } from '../hooks/useI18n';
 import { useNavigationState } from '../hooks/useNavigationState';
 import { useVirtualCollection } from '../hooks/useVirtualCollection';
+import { normalizeSearchText } from '../services/searchText';
 import '../navigation.css';
 
 interface LiveGridProps {
@@ -38,7 +39,7 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
   const { selectedCategory, searchText } = state;
   const deferredSearchText = useDeferredValue(searchText);
   const normalizedSearchText = useMemo(
-    () => deferredSearchText.toLowerCase().trim(),
+    () => normalizeSearchText(deferredSearchText.trim()),
     [deferredSearchText]
   );
   const effectiveSelectedCategory = selectedCategory === 'All channels' || categories.includes(selectedCategory)
@@ -70,10 +71,10 @@ const LiveGridComponent: React.FC<LiveGridProps> = ({
       }
 
       if (hasSearch) {
-        const channelMatch = channel.name.toLowerCase().includes(normalizedSearchText);
+        const channelMatch = normalizeSearchText(channel.name).includes(normalizedSearchText);
         if (!channelMatch) {
           const epg = getChannelEpgInfo(channel);
-          const programMatch = epg.program?.title?.toLowerCase().includes(normalizedSearchText) || false;
+          const programMatch = epg.program?.title ? normalizeSearchText(epg.program.title).includes(normalizedSearchText) : false;
           if (!programMatch) continue;
         }
       }

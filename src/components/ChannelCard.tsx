@@ -2,7 +2,8 @@ import { formatProgrammeTime as formatTime } from '../services/programmeTime';
 import { useI18n } from '../hooks/useI18n';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel, EPGProgram } from '../types';
-import { getChannelQualityLabel } from '../services/utils';
+import { getChannelBaseNamePreserveCase, getChannelQualityLabel } from '../services/utils';
+import { getChannelInitials, isUsableChannelLogo } from '../services/channelArtwork';
 
 interface ChannelCardProps {
   channel: Channel;
@@ -16,18 +17,6 @@ interface ChannelCardProps {
   qualityMappings?: Record<string, string>;
 }
 
-const getInitials = (name: string) => {
-  return name
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map(part => part[0])
-    .join('')
-    .toUpperCase();
-};
-
-
-
 const ChannelCardComponent: React.FC<ChannelCardProps> = ({
   channel,
   isActive,
@@ -40,12 +29,13 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
   qualityMappings
 }) => {
   const { t, locale } = useI18n();
+  const displayName = getChannelBaseNamePreserveCase(channel.name, qualityMappings) || channel.name;
   const [logoFailed, setLogoFailed] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const qualityButtonRef = useRef<HTMLButtonElement>(null);
   const qualityMenuRef = useRef<HTMLDivElement>(null);
-  const channelInitials = useMemo(() => getInitials(channel.name), [channel.name]);
+  const channelInitials = useMemo(() => getChannelInitials(channel.name), [channel.name]);
 
   const closeQualityMenu = useCallback((restoreFocus = true) => {
     setIsDropdownOpen(false);
@@ -111,7 +101,7 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
     >
       <button
         type="button"
-        aria-label={t('Play {channel}', { channel: channel.name })}
+        aria-label={t('Play {channel}', { channel: displayName })}
         onClick={() => onPlay(channel)}
         style={{
           position: 'absolute',
@@ -139,7 +129,7 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
               }
             }}
             title={t("Choose transmission quality")}
-            aria-label={t('Choose transmission quality for {channel}', { channel: channel.name })}
+            aria-label={t('Choose transmission quality for {channel}', { channel: displayName })}
             aria-expanded={isDropdownOpen}
             aria-haspopup="menu"
             aria-controls={`quality-menu-${channel.id}`}
@@ -189,7 +179,7 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
               ref={qualityMenuRef}
               id={`quality-menu-${channel.id}`}
               role="menu"
-              aria-label={t('Transmission quality for {channel}', { channel: channel.name })}
+              aria-label={t('Transmission quality for {channel}', { channel: displayName })}
               onBlur={(event) => {
                 if (!event.currentTarget.contains(event.relatedTarget)) {
                   closeQualityMenu(false);
@@ -289,7 +279,7 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
           e.stopPropagation();
           onToggleFavorite(channel);
         }}
-        aria-label={t(isFavorite ? 'Remove {channel} from favorites' : 'Add {channel} to favorites', { channel: channel.name })}
+        aria-label={t(isFavorite ? 'Remove {channel} from favorites' : 'Add {channel} to favorites', { channel: displayName })}
         aria-pressed={isFavorite}
         style={{
           position: 'absolute',
@@ -341,7 +331,7 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
           marginBottom: '8px'
         }}
       >
-        {channel.logoUrl && !logoFailed ? (
+        {isUsableChannelLogo(channel.logoUrl) && !logoFailed ? (
           <img 
             src={channel.logoUrl} 
             alt=""
@@ -438,9 +428,9 @@ const ChannelCardComponent: React.FC<ChannelCardProps> = ({
               marginBottom: '3px',
               fontFamily: 'inherit'
             }}
-            title={channel.name}
+            title={displayName}
           >
-            {channel.name}
+            {displayName}
           </h3>
           
 

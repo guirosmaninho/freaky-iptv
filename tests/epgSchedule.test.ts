@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { getEpgInfoFromPrograms } from '../src/services/epgSchedule';
+import { getEpgInfoFromPrograms, getUpcomingOverlapFlags } from '../src/services/epgSchedule';
 import type { EPGProgram } from '../src/types';
 
 const programme = (title: string, start: string, stop: string): EPGProgram => ({
@@ -17,6 +17,27 @@ const programme = (title: string, start: string, stop: string): EPGProgram => ({
 });
 
 describe('EPG schedule selection', () => {
+  it('marks overlaps against earlier visible programmes without changing their times', () => {
+    const current = programme('Long', '2026-06-18T19:00:00.000Z', '2026-06-18T23:00:00.000Z');
+    const upcoming = [
+      programme('Short', '2026-06-18T20:00:00.000Z', '2026-06-18T20:30:00.000Z'),
+      programme('Nested', '2026-06-18T21:00:00.000Z', '2026-06-18T21:30:00.000Z'),
+      programme('Next', '2026-06-18T23:00:00.000Z', '2026-06-19T00:00:00.000Z')
+    ];
+    assert.deepEqual(getUpcomingOverlapFlags(current, upcoming), [true, true, false]);
+    assert.equal(upcoming[0].startUtc, '2026-06-18T20:00:00.000Z');
+  });
+  it('does not list already ended overlapping programmes as upcoming', () => {
+    const programmes = [
+      programme('Long programme', '2026-06-18T19:00:00.000Z', '2026-06-18T23:00:00.000Z'),
+      programme('Already ended', '2026-06-18T20:00:00.000Z', '2026-06-18T20:30:00.000Z'),
+      programme('Future', '2026-06-18T22:00:00.000Z', '2026-06-18T23:30:00.000Z')
+    ];
+    const result = getEpgInfoFromPrograms(programmes, Date.parse('2026-06-18T21:00:00.000Z'));
+    assert.equal(result.program?.title, 'Long programme');
+    assert.deepEqual(result.upcoming.map(item => item.title), ['Future']);
+  });
+
   it('selects the most recently started programme when schedules overlap', () => {
     const programmes = [
       programme('Football', '2026-06-18T19:00:00.000Z', '2026-06-18T21:30:00.000Z'),
