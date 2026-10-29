@@ -1,0 +1,11 @@
+services:
+  freaky-iptv-site:
+    build: .
+    restart: unless-stopped
+    networks:
+      - ingress
+
+networks:
+  ingress:
+    external: true
+    name: ${FREAKY_INGRESS_NETWORK:-guirosmaninho-website_guirosmaninho}
