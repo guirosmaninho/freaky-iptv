@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://freakyiptv.guirosmaninho.com/sitemap.xml
