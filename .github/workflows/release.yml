@@ -90,6 +90,7 @@ jobs:
           TAG="v$VERSION"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" release-artifacts/* --clobber
+            gh release edit "$TAG" --title "$TAG" --notes-file RELEASE_NOTES.md
           else
-            gh release create "$TAG" release-artifacts/* --target "${{ github.sha }}" --title "$TAG" --generate-notes
+            gh release create "$TAG" release-artifacts/* --target "${{ github.sha }}" --title "$TAG" --notes-file RELEASE_NOTES.md
           fi

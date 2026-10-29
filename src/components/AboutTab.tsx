@@ -61,14 +61,13 @@ export const AboutTab: React.FC = () => {
   return (
     <div className="about-page animate-fade">
       <div className="about-hero-card">
-        <div className="about-hero-glow" aria-hidden="true" />
         <img
           src={`${import.meta.env.BASE_URL}cat_icon.png`}
           alt="Freaky IPTV"
           className="about-logo"
           decoding="async"
         />
-        <h1 className="about-title">Freaky IPTV</h1>
+        <h2 className="about-title">Freaky IPTV</h2>
       </div>
 
       <div className="about-grid">
@@ -119,7 +118,7 @@ export const AboutTab: React.FC = () => {
           <h2 id="about-updates-title" className="about-card-title">{t("Updates")}</h2>
         </div>
         <div className="about-update-status" role="status" aria-live="polite">
-          {update.message && t(update.message)}
+          {update.message ? t(update.message) : t('No update check has been run in this session.')}
           {update.status === 'downloading' && <progress value={update.progress} max="100">{update.progress}%</progress>}
           {update.status === 'available' && <strong>{t('Update available: {version}', { version: update.version })}</strong>}
           {update.status === 'downloaded' && <strong>{t("Update ready to install.")}</strong>}

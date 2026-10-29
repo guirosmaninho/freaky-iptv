@@ -138,7 +138,7 @@ describe('Windows distribution contract', () => {
       const cssFiles = readdirSync(assetDirectory).filter(fileName => fileName.endsWith('.css'));
       assert.ok(cssFiles.length > 0, 'Expected at least one production stylesheet');
 
-      const sourceCss = ['src/index.css', 'src/navigation.css', 'src/settings.css'].map(readProjectFile).join('\n');
+      const sourceCss = ['src/index.css', 'src/navigation.css', 'src/settings.css', 'src/app-ui.css'].map(readProjectFile).join('\n');
       const productionCss = cssFiles.map(file => readFileSync(join(assetDirectory, file), 'utf8')).join('');
       assert.ok(
         Buffer.byteLength(productionCss) < Buffer.byteLength(sourceCss) * 0.85,

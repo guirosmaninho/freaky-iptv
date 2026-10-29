@@ -1,5 +1,5 @@
 import { useI18n } from '../hooks/useI18n';
-import React, { memo, useState } from 'react';
+import React, { memo } from 'react';
 
 interface SidebarProps {
   activeSection: string;
@@ -106,214 +106,40 @@ const SidebarComponent: React.FC<SidebarProps> = ({
   showYearReview
 }) => {
   const { t } = useI18n();
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
-
   return (
-    <aside 
-      className={`glass-panel liquid-sidebar ${isCollapsed ? 'is-collapsed' : ''}`}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        width: isCollapsed ? '72px' : '236px',
-        height: '100%',
-        transition: 'var(--transition-smooth)',
-        overflow: 'hidden',
-        zIndex: 10,
-        position: 'relative'
-      }}
-    >
-      {/* Brand Header & Toggle Button */}
-      <div 
-        className="sidebar-header"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: isCollapsed ? 'center' : 'space-between',
-          height: '64px',
-          minHeight: '64px',
-          padding: isCollapsed ? '0' : '0 16px',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
-          position: 'relative',
-          overflow: 'hidden'
-        }}
-      >
-        {!isCollapsed && (
-          <div 
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              animation: 'fadeIn 0.25s ease'
-            }}
-          >
-            <img 
-              src={`${import.meta.env.BASE_URL}cat_icon.png`}
-              alt={t("Freaky Logo")}
-              decoding="async"
-              style={{
-                width: '28px',
-                height: '28px',
-                objectFit: 'contain'
-              }}
-            />
-            <span 
-              style={{
-                fontSize: '16px',
-                fontWeight: 600,
-                color: 'var(--text-primary)',
-                letterSpacing: '0.3px',
-                fontFamily: 'inherit'
-              }}
-            >
-              Freaky IPTV
-            </span>
-          </div>
-        )}
-
-        <button
-          className={`sidebar-toggle-button ${isCollapsed ? 'is-collapsed' : ''}`}
-          onClick={onToggleCollapse}
-          title={t(isCollapsed ? 'Show sidebar' : 'Hide sidebar')}
+    <aside className={`glass-panel liquid-sidebar ${isCollapsed ? 'is-collapsed' : ''}`}>
+      <div className="sidebar-header">
+        <div className="sidebar-brand">
+          <span className="sidebar-brand-mark">
+            <img src={`${import.meta.env.BASE_URL}cat_icon.png`} alt={t('Freaky Logo')} decoding="async" />
+          </span>
+          {!isCollapsed && <span className="sidebar-brand-name"><strong>Freaky</strong><span>IPTV</span></span>}
+        </div>
+        <button type="button" className="sidebar-toggle-button"
+          onClick={onToggleCollapse} title={t(isCollapsed ? 'Show sidebar' : 'Hide sidebar')}
           aria-label={t(isCollapsed ? 'Show sidebar' : 'Hide sidebar')}
-          aria-expanded={!isCollapsed}
-          aria-controls="primary-navigation"
-          style={{
-            width: '36px',
-            height: '36px',
-            borderRadius: '50%',
-            color: 'var(--text-secondary)',
-            background: 'rgba(255, 255, 255, 0.07)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            transition: 'var(--transition-fast)',
-            border: '1px solid rgba(255, 255, 255, 0.12)',
-            outline: 'none',
-            cursor: 'pointer'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = 'var(--text-primary)';
-            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = 'var(--text-secondary)';
-            e.currentTarget.style.background = 'rgba(255, 255, 255, 0.07)';
-          }}
-        >
-          <svg className="sidebar-toggle-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-            <rect x="3" y="4" width="18" height="16" rx="3" />
-            <path d="M9 4v16" />
-          </svg>
+          aria-expanded={!isCollapsed} aria-controls="primary-navigation">
+          <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></svg>
         </button>
       </div>
-
-      {/* Nav List */}
-      <nav
-        id="primary-navigation"
-        aria-label={t("Primary navigation")}
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          padding: '20px 0',
-          gap: '4px',
-          flex: 1
-        }}
-      >
-        {[...NAV_ITEMS, ...(showYearReview ? [YEAR_REVIEW_ITEM] : [])].map((item) => {
-          const isActive = activeSection === item.id;
-          const isHovered = hoveredId === item.id;
-
-          return (
-            <div
-              key={item.id}
-              style={{
-                position: 'relative',
-                width: '100%',
-                minHeight: '40px',
-                display: 'flex',
-                alignItems: 'center'
-              }}
-            >
-              {/* macOS Sidebar Selection Capsule */}
-              {isActive && (
-                <div 
-                  className="sidebar-selection-capsule"
-                  style={{
-                    position: 'absolute',
-                    top: '1px',
-                    bottom: '1px',
-                    left: '10px',
-                    right: '10px',
-                    borderRadius: '8px',
-                    background: 'var(--ui-selection)',
-                    border: '1px solid transparent',
-                    zIndex: 1,
-                    pointerEvents: 'none',
-                    animation: 'fadeIn 0.15s ease'
-                  }}
-                />
-              )}
-
-              <button
-                type="button"
-                className={item.id === 'YearReview' ? 'sidebar-year-review--highlighted' : undefined}
-                onClick={() => onNavigate(item.id)}
-                aria-label={t(item.label)}
-                aria-current={isActive ? 'page' : undefined}
-                title={isCollapsed ? t(item.label) : undefined}
-                onMouseEnter={() => setHoveredId(item.id)}
-                onMouseLeave={() => setHoveredId(null)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  padding: isCollapsed ? '0' : '0 12px',
-                  margin: '0 10px',
-                  height: '36px',
-                  borderRadius: '8px',
-                  background: (!isActive && isHovered) ? 'rgba(255, 255, 255, 0.055)' : 'transparent',
-                  color: isActive ? 'var(--ui-text-primary)' : 'var(--text-secondary)',
-                  fontWeight: isActive ? 600 : 500,
-                  fontSize: '13px',
-                  fontFamily: 'inherit',
-                  gap: '12px',
-                  width: 'calc(100% - 20px)',
-                  textAlign: 'left',
-                  justifyContent: isCollapsed ? 'center' : 'flex-start',
-                  transition: 'var(--transition-fast)',
-                  border: 'none',
-                  outline: 'none',
-                  cursor: 'pointer',
-                  zIndex: 3
-                }}
-              >
-                <span aria-hidden="true" style={{ display: 'flex', alignItems: 'center', minWidth: '18px', color: isActive ? 'var(--ui-text-primary)' : 'currentColor' }}>
-                  {item.icon}
-                </span>
-                {!isCollapsed && (
-                  <span style={{ whiteSpace: 'nowrap' }}>
-                    {t(item.label)}
-                  </span>
-                )}
-              </button>
-            </div>
-          );
-        })}
+      <nav id="primary-navigation" aria-label={t('Primary navigation')}>
+        {[...NAV_ITEMS, ...(showYearReview ? [YEAR_REVIEW_ITEM] : [])].map(item => (
+          <button key={item.id} type="button"
+            className={`sidebar-nav-item ${item.id === 'Stats' ? 'sidebar-nav-item--divider' : ''} ${item.id === 'YearReview' ? 'sidebar-year-review--highlighted' : ''}`}
+            onClick={() => onNavigate(item.id)} aria-label={t(item.label)}
+            aria-current={activeSection === item.id ? 'page' : undefined}
+            title={isCollapsed ? t(item.label) : undefined}>
+            <span aria-hidden="true">{item.icon}</span>
+            {!isCollapsed && <span>{t(item.label)}</span>}
+          </button>
+        ))}
       </nav>
-
       <div className="sidebar-footer-nav">
-        <button
-          type="button"
-          className={`sidebar-footer-button ${activeSection === 'Settings' ? 'is-active' : ''}`}
-          onClick={() => onNavigate('Settings')}
-          aria-label={t("Settings")}
-          aria-current={activeSection === 'Settings' ? 'page' : undefined}
-          title={isCollapsed ? t('Settings') : undefined}
-        >
-          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-          {!isCollapsed && <span>{t("Settings")}</span>}
+        <button type="button" className={`sidebar-footer-button ${activeSection === 'Settings' ? 'is-active' : ''}`}
+          onClick={() => onNavigate('Settings')} aria-label={t('Settings')}
+          aria-current={activeSection === 'Settings' ? 'page' : undefined} title={isCollapsed ? t('Settings') : undefined}>
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="m9 3-1 3-3 1-2 5 2 5 3 1 1 3h6l1-3 3-1 2-5-2-5-3-1-1-3Z" /></svg>
+          {!isCollapsed && <span>{t('Settings')}</span>}
         </button>
       </div>
     </aside>

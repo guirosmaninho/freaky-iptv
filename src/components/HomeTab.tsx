@@ -43,7 +43,7 @@ const HomeTabComponent: React.FC<HomeTabProps> = ({
   onOpenReview,
   onDismissReview
 }) => {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const isChannelFavorite = useCallback((channel: Channel) => {
     if (favoriteChannelIds.has(channel.id)) return true;
     return (channel.variants || []).some(variant => favoriteChannelIds.has(variant.id));
@@ -98,7 +98,9 @@ const HomeTabComponent: React.FC<HomeTabProps> = ({
           <img src={`${import.meta.env.BASE_URL}cat_icon.png`} alt="Freaky IPTV" decoding="async" />
         </div>}
         <div className="home-greeting-copy" data-greeting-content>
-          <h2 id="home-greeting-title">{hasPlaylist ? greeting?.highlight || t('Home') : 'Freaky IPTV'}</h2>
+          {hasPlaylist && <span className="home-date">{new Date().toLocaleDateString(locale, { weekday: 'long', day: 'numeric', month: 'long' })}</span>}
+          <h2 id="home-greeting-title">{hasPlaylist ? t('Home') : 'Freaky IPTV'}</h2>
+          {hasPlaylist && greeting?.highlight && <p className="home-greeting-summary">{greeting.highlight}</p>}
           {hasPlaylist && greeting?.programTitle && <p className="home-current-program">{greeting.programTitle}</p>}
         </div>
         {!hasPlaylist ? (

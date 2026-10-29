@@ -521,7 +521,7 @@ test('presents overlapping seasonal reviews in priority order', async () => {
     await window.electron.saveHistory(history);
   }, reviewHistory);
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Home', level: 2 })).toBeVisible();
 
   for (const [width, height] of [[1024, 600], [1280, 720], [1920, 1080]]) {
     await page.setViewportSize({ width, height });

@@ -98,13 +98,13 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
     tone: 'accent' | 'green' | 'muted' | 'orange';
   }> = [
     {
-      label: 'TOTAL WATCH TIME',
+      label: 'Total watch time',
       value: stats.totalWatchTime,
       meta: t('{value} this month', { value: stats.monthWatchTime }),
       tone: 'accent'
     },
     {
-      label: 'MEASURED DATA',
+      label: 'Measured data',
       value: stats.totalDataFormatted,
       meta: t('{value} this month', { value: stats.monthDataFormatted }),
       detail: stats.unmeasuredSessions !== '0'
@@ -113,19 +113,19 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
       tone: 'green'
     },
     {
-      label: 'SESSIONS COUNT',
+      label: 'Sessions count',
       value: stats.totalSessions,
       meta: t('Avg: {duration} per session', { duration: stats.avgSessionLength }),
       tone: 'muted'
     },
     {
-      label: 'PEAK TIMING',
+      label: 'Peak timing',
       value: stats.peakHour,
       meta: t('Most active day: {day}', { day: stats.peakDay }),
       tone: 'muted'
     },
     {
-      label: 'LONGEST SESSION',
+      label: 'Longest session',
       value: stats.longestSession,
       meta: stats.longestSessionChannel || t('No session recorded'),
       detail: stats.longestSessionStartedAt ? t('Started {date}', { date: stats.longestSessionStartedAt }) : undefined,
@@ -204,9 +204,7 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
                           data-tooltip-placement={getEdgeTooltipPlacement(weekIndex, heatmapWeeks.length)}
                           aria-label={isFuture ? undefined : cell.tooltip}
                           style={{
-                            '--activity': cell.intensity === 0
-                              ? 'rgba(255, 255, 255, 0.045)'
-                              : `rgba(32, 208, 113, ${cell.intensity})`,
+                            '--activity-level': cell.intensity,
                             visibility: isFuture ? 'hidden' : undefined
                           } as React.CSSProperties}
                         />
@@ -220,11 +218,11 @@ export const StatsTab: React.FC<StatsTabProps> = ({ stats, onRefreshStats, onCop
 
           <div className="stats-heatmap-legend" aria-hidden="true">
             <span>{t("Less")}</span>
-            <i style={{ '--activity': 'rgba(255, 255, 255, 0.045)' } as React.CSSProperties} />
-            <i style={{ '--activity': 'rgba(32, 208, 113, 0.25)' } as React.CSSProperties} />
-            <i style={{ '--activity': 'rgba(32, 208, 113, 0.5)' } as React.CSSProperties} />
-            <i style={{ '--activity': 'rgba(32, 208, 113, 0.75)' } as React.CSSProperties} />
-            <i style={{ '--activity': 'rgba(32, 208, 113, 1)' } as React.CSSProperties} />
+            <i style={{ '--activity-level': 0 } as React.CSSProperties} />
+            <i style={{ '--activity-level': .25 } as React.CSSProperties} />
+            <i style={{ '--activity-level': .5 } as React.CSSProperties} />
+            <i style={{ '--activity-level': .75 } as React.CSSProperties} />
+            <i style={{ '--activity-level': 1 } as React.CSSProperties} />
             <span>{t("More")}</span>
           </div>
         </section>
