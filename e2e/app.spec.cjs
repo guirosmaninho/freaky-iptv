@@ -134,7 +134,7 @@ test.beforeAll(async () => {
   server = await startFixtureServer(videoPath);
   baseUrl = `http://127.0.0.1:${server.address().port}`;
   electronApp = await electron.launch({
-    args: ['.', '--disable-gpu'],
+    args: ['.', '--disable-gpu', '--mute-audio'],
     cwd: path.resolve(__dirname, '..'),
     env: {
       ...process.env,
@@ -443,6 +443,45 @@ test('does not pause live playback when the video is clicked or activated from t
   await page.waitForTimeout(500);
   const afterKeyboard = await video.evaluate(element => element.currentTime);
   expect(afterKeyboard).toBeGreaterThan(afterClick);
+});
+
+test('builds a reserve after separate playback interruptions', async () => {
+  const video = page.locator('video');
+  if (await video.count() === 0) {
+    await page.getByRole('button', { name: 'Live TV', exact: true }).click();
+    await page.getByRole('button', { name: 'Play News One', exact: true }).click();
+  }
+  await expect.poll(() => video.evaluate(element => element.currentTime)).toBeGreaterThan(0.1);
+
+  // Simulate a buffer underrun while Chromium continues to handle pause and play.
+  await video.evaluate(element => {
+    Object.defineProperty(element, 'buffered', {
+      configurable: true,
+      get: () => ({ length: 1, start: () => 0, end: () => element.currentTime + 0.1 })
+    });
+    element.dispatchEvent(new Event('waiting'));
+    Object.defineProperty(element, 'readyState', { configurable: true, value: HTMLMediaElement.HAVE_CURRENT_DATA });
+    try {
+      element.dispatchEvent(new Event('stalled'));
+    } finally {
+      delete element.readyState;
+    }
+  });
+  try {
+    expect(await video.evaluate(element => element.paused)).toBe(false);
+    expect(await video.evaluate(element => {
+      element.dispatchEvent(new Event('playing'));
+      element.dispatchEvent(new Event('waiting'));
+      return element.paused;
+    })).toBe(true);
+
+    await expect(page.locator('.player-loading')).toBeVisible();
+    expect(await video.evaluate(element => element.paused)).toBe(true);
+  } finally {
+    await video.evaluate(element => { delete element.buffered; });
+  }
+
+  await expect.poll(() => video.evaluate(element => element.paused), { timeout: 3000 }).toBe(false);
 });
 
 test('records and gracefully finalizes a source MKV', async () => {

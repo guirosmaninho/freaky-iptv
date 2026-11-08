@@ -50,6 +50,17 @@ const TRANSIENT_BUFFERING_INDICATOR_DELAY_MS = 800;
 const IMMERSIVE_CONTROLS_AUTO_HIDE_MS = 2600;
 const NETWORK_HISTORY_SAMPLE_COUNT = 36;
 const ADAPTIVE_BUFFER_DECAY_MS = 10 * 60 * 1000;
+const REBUFFER_TARGET_SECONDS: Record<AdaptiveBufferLevel, number> = { 0: 0, 1: 4, 2: 7 };
+const REBUFFER_MAX_WAIT_MS = 8000;
+const REBUFFER_CHECK_INTERVAL_MS = 250;
+
+const bufferedSecondsAhead = ({ buffered, currentTime }: HTMLVideoElement) => {
+  for (let index = 0; index < buffered.length; index++) {
+    const end = buffered.end(index);
+    if (buffered.start(index) <= currentTime && currentTime <= end) return end - currentTime;
+  }
+  return 0;
+};
 
 const formatBitrate = (kbps: number) => {
   if (kbps <= 0) return '0 Kbps';
@@ -507,6 +518,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let startupFallback: (() => void | Promise<void>) | null = null;
     let attempts: PlaybackAttempt[] = [];
     let recoveringFromStall = false;
+    let rebufferTimer: number | null = null;
     let activeTargetBoostSeconds = 0;
     let stallRecoveryBoostTimer: number | null = null;
     let performedLiveEdgeJoin = false;
@@ -572,6 +584,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
     };
 
+    const clearRebufferTimer = () => {
+      if (rebufferTimer !== null) {
+        window.clearInterval(rebufferTimer);
+        rebufferTimer = null;
+      }
+    };
+
     const showBufferingIndicator = (text = 'Buffering') => {
       clearBufferingIndicatorTimer();
 
@@ -595,6 +614,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       clearStartupTimer();
       clearProxyTrafficPolling();
       clearBufferingIndicatorTimer();
+      clearRebufferTimer();
       setIsBuffering(false);
       setBufferingText(message);
       setIsPlaying(false);
@@ -607,6 +627,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const resetForRetry = () => {
       suppressVideoError = true;
+      clearRebufferTimer();
       cleanupPlayers();
       window.setTimeout(() => {
         suppressVideoError = false;
@@ -1147,6 +1168,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       applyLiveBufferProfiles(activeTargetBoostSeconds);
     };
 
+    const refillBeforeResuming = () => {
+      const targetSeconds = REBUFFER_TARGET_SECONDS[adaptiveBufferLevelRef.current];
+      if (targetSeconds === 0 || bufferedSecondsAhead(video) >= targetSeconds) return;
+
+      video.pause();
+      const deadline = performance.now() + REBUFFER_MAX_WAIT_MS;
+      rebufferTimer = window.setInterval(() => {
+        const ready = video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
+          && bufferedSecondsAhead(video) >= targetSeconds;
+        if (!ready && performance.now() < deadline) return;
+        clearRebufferTimer();
+        playAttachedMedia();
+      }, REBUFFER_CHECK_INTERVAL_MS);
+    };
+
     const joinLiveEdgeOnce = () => {
       if (performedLiveEdgeJoin || !mpegtsRef.current || video.buffered.length === 0) return;
       performedLiveEdgeJoin = true;
@@ -1162,16 +1198,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     // Video events listeners
     const handlePlaying = () => {
+      if (video.paused) return;
       console.log('[VideoPlayer] Video playing event fired. Playback successfully started.');
-      const alreadyStarted = hasStartedPlayback;
       hasStartedPlayback = true;
-      stallEventsRef.current = [];
       clearStartupTimer();
       clearProxyTrafficPolling();
       clearBufferingIndicatorTimer();
+      clearRebufferTimer();
       setIsPlaying(true);
       setIsBuffering(false);
       setBufferingText('Playing');
+      setPlaybackStatus('playing');
+      setPlaybackFailure(null);
       if (recoveringFromStall) {
         // Right after a stall the stream is at its most fragile: accept a
         // little extra latency for a short window, then let rate catch-up
@@ -1187,46 +1225,37 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }, POST_STALL_BOOST_MS);
       }
       joinLiveEdgeOnce();
-      if (alreadyStarted) return;
+      playbackReporter.playing(getCurrentStreamMode());
 
       const activeAttempt = attempts.at(-1);
-      if (activeAttempt) {
+      if (activeAttempt?.result === 'pending') {
         activeAttempt.result = 'playing';
         activeAttempt.durationMs = Math.max(0, Date.now() - Date.parse(activeAttempt.startedAtUtc));
         publishAttempts();
+        if (currentEngine) rememberSuccessfulPlaybackEngine(sourceUrl, currentEngine, window.localStorage);
       }
-      setPlaybackStatus('playing');
-      setPlaybackFailure(null);
-      if (currentEngine) rememberSuccessfulPlaybackEngine(sourceUrl, currentEngine, window.localStorage);
-      playbackReporter.playing(getCurrentStreamMode());
     };
     
-    const handleWaiting = () => {
+    const handleBufferInterruption = (event: Event) => {
       if (!hasStartedPlayback) {
         jumpBufferGaps();
         return;
       }
-      recoveringFromStall = true;
-      playbackReporter.bufferingStart();
-      showBufferingIndicator();
-      increaseAdaptiveBufferIfNeeded();
-      jumpBufferGaps();
-    };
+      if (recoveringFromStall || video.paused) return;
+      if (event.type === 'stalled' && video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return;
 
-    const handleStalled = () => {
-      if (!hasStartedPlayback) {
-        jumpBufferGaps();
-        return;
-      }
       recoveringFromStall = true;
-      playbackReporter.stalled();
+      if (event.type === 'stalled') playbackReporter.stalled();
+      else playbackReporter.bufferingStart();
       showBufferingIndicator();
       increaseAdaptiveBufferIfNeeded();
       jumpBufferGaps();
+      refillBeforeResuming();
     };
 
     const handleEnded = () => {
       clearBufferingIndicatorTimer();
+      clearRebufferTimer();
       setIsBuffering(false);
       setBufferingText('Stream ended');
       setIsPlaying(false);
@@ -1275,8 +1304,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
 
     video.addEventListener('playing', handlePlaying);
-    video.addEventListener('waiting', handleWaiting);
-    video.addEventListener('stalled', handleStalled);
+    video.addEventListener('waiting', handleBufferInterruption);
+    video.addEventListener('stalled', handleBufferInterruption);
     video.addEventListener('ended', handleEnded);
     video.addEventListener('error', handleError);
     video.addEventListener('progress', handleProgress);
@@ -1290,7 +1319,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (!video || !hasStartedPlayback || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
       const prevTime = video.currentTime;
       jumpBufferGaps();
-      if (video.currentTime !== prevTime && video.paused) {
+      if (rebufferTimer === null && video.currentTime !== prevTime && video.paused) {
         video.play().catch(e => console.warn('Play interrupted:', e));
       }
     }, 1000);
@@ -1302,6 +1331,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       clearStartupTimer();
       clearProxyTrafficPolling();
       clearBufferingIndicatorTimer();
+      clearRebufferTimer();
       clearStallRecoveryBoost();
       // Only stop a proxy this effect run actually started; an unconditional
       // stop would kill proxy state for unrelated cleanups (e.g. quality
@@ -1313,8 +1343,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (playbackRelayRef.current?.id === relayIdToStop) playbackRelayRef.current = null;
       }
       video.removeEventListener('playing', handlePlaying);
-      video.removeEventListener('waiting', handleWaiting);
-      video.removeEventListener('stalled', handleStalled);
+      video.removeEventListener('waiting', handleBufferInterruption);
+      video.removeEventListener('stalled', handleBufferInterruption);
       video.removeEventListener('ended', handleEnded);
       video.removeEventListener('error', handleError);
       video.removeEventListener('progress', handleProgress);
@@ -1332,7 +1362,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const tick = async () => {
       const video = videoRef.current;
-      if (!video || video.paused || video.ended || statsTickInFlightRef.current) return;
+      if (!video || (video.paused && !isPlaying) || video.ended || statsTickInFlightRef.current) return;
       statsTickInFlightRef.current = true;
 
       try {
@@ -1408,17 +1438,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const readBytes = `${(bytesRef.current / (1024 * 1024)).toFixed(1)} MB`;
 
       // Buffer Percentage
-      let bufferHealth = 0;
+      const bufferHealth = bufferedSecondsAhead(video);
       if (video.buffered.length > 0) {
-        const curTime = video.currentTime;
-        let bufEnd = curTime;
-        for (let i = 0; i < video.buffered.length; i++) {
-          if (video.buffered.start(i) <= curTime && video.buffered.end(i) >= curTime) {
-            bufEnd = video.buffered.end(i);
-            break;
-          }
-        }
-        bufferHealth = Math.max(0, bufEnd - curTime);
         const percent = Math.min(100, Math.round((bufferHealth / 10) * 100));
         
         if (isBuffering) {

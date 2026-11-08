@@ -75,3 +75,25 @@ test('still shares a schedule between quality variants of a plus channel', () =>
   assert.equal(result.programs.get('plus-full'), schedule);
   assert.equal(result.ambiguousIds.size, 0);
 });
+
+test('restores a shared guide when its ID and display name both identify the channel', () => {
+  const id = 'sporttv1.pt';
+  const full = channel('fhd', 'PT: Sport TV 1 Full HD', id);
+  const hd = channel('hd', 'PT: Sport TV 1 HD', id);
+  const result = buildChannelProgramLookup([
+    { ...full, variants: [full, hd] },
+    channel('hq', 'PT: Sport TV 1 HQ', id),
+    channel('alias', 'PT: ⚡Sport Tv ⛑️', id),
+    channel('foreign', 'ES: Sport TV 1', id)
+  ], {
+    programsByChannel: { [id]: schedule },
+    displayNames: { [id]: 'PT: Sport TV 1 Full HD' },
+    normalizedNames: { ptsporttv1fullhd: id },
+    issues: []
+  });
+
+  assert.equal(result.programs.get('fhd'), schedule);
+  assert.equal(result.programs.get('hd'), schedule);
+  assert.equal(result.programs.get('hq'), schedule);
+  assert.deepEqual([...result.ambiguousIds], ['alias', 'foreign']);
+});

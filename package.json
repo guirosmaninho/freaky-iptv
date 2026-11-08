@@ -1,7 +1,7 @@
 {
   "name": "freaky-iptv",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Desktop IPTV player with programme guide, favourites and playback statistics.",
   "author": "Freaky IPTV",
   "license": "MIT",
@@ -108,7 +108,8 @@
       "preload.cjs",
       "package.json",
       "THIRD_PARTY_NOTICES.md",
-      "native-runtime-package/**"
+      "native-runtime-package/**",
+      "!**/ffmpeg{,.exe} [0-9]*"
     ],
     "win": {
       "icon": "build-resources/cat_icon.ico",

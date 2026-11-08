@@ -134,13 +134,14 @@ async function main() {
     requireFile(library);
     assertArchitecture(library);
   }
+  assertArchitecture(ffmpeg);
   if (process.arch === arch) {
     const probe = spawnSync(helper, ['--verify-runtime'], { encoding: 'utf8', timeout: 20_000 });
     assert.equal(probe.status, 0, probe.stderr || probe.error?.message || 'LibVLC runtime failed to load.');
+    await verifyStartup(appBundle);
   }
-  assertArchitecture(ffmpeg);
-  await verifyStartup(appBundle);
-  console.log(`macOS ${arch} package verified: DMG, app bundle, native runtime, FFmpeg and startup.`);
+  const startup = process.arch === arch ? 'startup verified' : `startup deferred to a macOS ${arch} host`;
+  console.log(`macOS ${arch} package verified: DMG, app bundle, native runtime and FFmpeg. ${startup}.`);
 }
 
 main().catch((error) => {

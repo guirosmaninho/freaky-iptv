@@ -32,6 +32,7 @@ System.Security.Cryptography.ProtectedData.dll
 # Packaging and test output
 build-resources/cat_icon.ico
 build-resources/cat_icon.icns
+build-resources/cat_icon [0-9]*.icns
 build/
 out/
 release/
@@ -132,5 +133,7 @@ Desktop.ini
 /.agents
 /libvlc-proxy-runtime
 /.zcode
+/.taste-skill/
 
+output/layout/
 output/playwright/
