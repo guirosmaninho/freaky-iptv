@@ -15,7 +15,19 @@
 </p>
 
 <p align="center">
-  <sub>Windows x64 · macOS Apple Silicon and Intel</sub>
+  <a href="https://github.com/guirosmaninho/freaky-iptv/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/guirosmaninho/freaky-iptv?label=release"></a>
+  <img alt="Platforms: Windows x64 and macOS Intel and Apple Silicon" src="https://img.shields.io/badge/platform-Windows%20x64%20%7C%20macOS%20Intel%20%26%20Apple%20Silicon-0078d4.svg">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/guirosmaninho/freaky-iptv/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/guirosmaninho/freaky-iptv/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/guirosmaninho/freaky-iptv/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/guirosmaninho/freaky-iptv/main"></a>
+  <img alt="Electron 42" src="https://img.shields.io/badge/Electron-42-47848f.svg">
+  <img alt="React 19" src="https://img.shields.io/badge/React-19-61dafb.svg">
+  <img alt="TypeScript 6" src="https://img.shields.io/badge/TypeScript-6-3178c6.svg">
+  <img alt="Node.js 24.15" src="https://img.shields.io/badge/Node.js-24.15-339933.svg">
+  <img alt=".NET 8" src="https://img.shields.io/badge/.NET-8-512bd4.svg">
 </p>
 
 [![Freaky IPTV home screen with favourite channels, recent activity and a monthly viewing review](website/assets/app-previews/home.png)](website/assets/app-previews/home.png)
