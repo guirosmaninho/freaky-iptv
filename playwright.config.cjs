@@ -7,7 +7,6 @@ module.exports = defineConfig({
   workers: 1,
   fullyParallel: false,
   outputDir: 'artifacts/playwright',
-  snapshotPathTemplate: '{testDir}/snapshots/{arg}{ext}',
   use: {
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',

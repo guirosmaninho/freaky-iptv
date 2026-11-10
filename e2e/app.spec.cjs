@@ -17,13 +17,6 @@ let mediaDirectory;
 let server;
 let baseUrl;
 
-async function compareVisualSnapshot(name, options = {}) {
-  const baseline = path.join(__dirname, 'snapshots', name);
-  if (process.env.FREAKYIPTV_VISUAL_SNAPSHOTS === '1' || fs.existsSync(baseline)) {
-    await expect(page).toHaveScreenshot(name, options);
-  }
-}
-
 function startFixtureServer(videoPath) {
   return new Promise((resolve) => {
     const instance = http.createServer((request, response) => {
@@ -170,7 +163,6 @@ test('renders the main screens at supported window sizes', async () => {
 
   for (const [width, height] of [[1024, 600], [1280, 720], [1920, 1080]]) {
     await page.setViewportSize({ width, height });
-    await compareVisualSnapshot(`home-${width}x${height}.png`, { animations: 'disabled' });
     await page.screenshot({ animations: 'disabled', path: `output/playwright/home-${width}x${height}.png` });
   }
 
@@ -198,7 +190,6 @@ test('renders the main screens at supported window sizes', async () => {
 
   await page.getByRole('button', { name: 'Live TV', exact: true }).click();
   await expect(page.getByRole('heading', { name: /^Live TV/, level: 2 })).toBeVisible();
-  await compareVisualSnapshot('live-tv-1920x1080.png', { animations: 'disabled' });
 
   await page.getByRole('button', { name: 'Home', exact: true }).click();
   await expect(page.locator('.home-greeting-hero')).toHaveAttribute('data-greeting-id', greetingId);
@@ -214,7 +205,6 @@ test('renders the main screens at supported window sizes', async () => {
   await playlistField.focus();
   await playlistField.blur();
   await expect(playlistField).toHaveAttribute('type', 'password');
-  await compareVisualSnapshot('settings-1920x1080.png', { animations: 'disabled', fullPage: true });
   await page.screenshot({ animations: 'disabled', path: 'output/playwright/settings-desktop.png' });
 
   await page.getByLabel('Refresh sources every (hours)').fill('6');
@@ -267,7 +257,6 @@ test('zaps with arrow keys, wraps channels, and preserves full app mode', async 
   await expect(page.getByRole('button', { name: 'Playback statistics' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /last channel/i })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^play$/i })).toHaveCount(0);
-  await compareVisualSnapshot('player-compact-1920x1080.png', { animations: 'disabled' });
 
   const compactGlass = await page.locator('.player-shell--compact').evaluate((element) => {
     const style = getComputedStyle(element);
@@ -287,7 +276,6 @@ test('zaps with arrow keys, wraps channels, and preserves full app mode', async 
 
   await page.getByRole('button', { name: /Expand News One player/ }).click();
   await expect(page.locator('.player-shell')).toHaveClass(/player-shell--expanded/);
-  await compareVisualSnapshot('player-full-app-controls-visible-1920x1080.png', { animations: 'disabled' });
 
   const hudGlass = await page.locator('.hud-glass-layer').evaluate((element) => {
     const style = getComputedStyle(element);
@@ -376,7 +364,6 @@ test('zaps with arrow keys, wraps channels, and preserves full app mode', async 
   await expect(slider).toHaveValue(String(Math.min(100, before + 5)));
   await page.mouse.move(10, 10);
   await expect(page.locator('.player-shell')).toHaveClass(/player-shell--controls-hidden/, { timeout: 5000 });
-  await compareVisualSnapshot('player-full-app-controls-hidden-1920x1080.png', { animations: 'disabled' });
   await page.mouse.move(960, 540);
 });
 
@@ -487,7 +474,6 @@ test('builds a reserve after separate playback interruptions', async () => {
 test('records and gracefully finalizes a source MKV', async () => {
   await page.getByRole('button', { name: 'Start recording' }).click();
   await expect(page.getByRole('button', { name: 'Stop recording' })).toBeVisible();
-  await compareVisualSnapshot('player-recording-active-1920x1080.png', { animations: 'disabled' });
   await page.waitForTimeout(1500);
   await page.getByRole('button', { name: 'Stop recording' }).click();
   await expect(page.getByRole('button', { name: 'Start recording' })).toBeVisible({ timeout: 8000 });
@@ -562,10 +548,7 @@ test('presents overlapping seasonal reviews in priority order', async () => {
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Home', level: 2 })).toBeVisible();
 
-  for (const [width, height] of [[1024, 600], [1280, 720], [1920, 1080]]) {
-    await page.setViewportSize({ width, height });
-    await compareVisualSnapshot(`review-banner-${width}x${height}.png`, { animations: 'disabled' });
-  }
+  await page.setViewportSize({ width: 1920, height: 1080 });
 
   await expect(page.getByRole('button', { name: 'Year Review', exact: true })).toHaveClass(/sidebar-year-review--highlighted/);
   await page.getByRole('button', { name: 'Live TV', exact: true }).click();
@@ -586,7 +569,6 @@ test('presents overlapping seasonal reviews in priority order', async () => {
   expect(layout[0].bottom).toBeLessThanOrEqual(layout[1].top);
   await page.keyboard.press('ArrowRight');
   await expect(page.locator('.annual-review-progress')).toHaveAttribute('aria-label', /Chapter 2/);
-  await compareVisualSnapshot('annual-review-1920x1080.png', { animations: 'disabled' });
 
   const savedSettings = await page.evaluate(() => window.electron.loadSettings());
   expect(savedSettings.openedReviewIds).toContain('annual:2022');

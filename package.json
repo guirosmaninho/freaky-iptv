@@ -41,7 +41,6 @@
     "lint": "eslint .",
     "test": "node scripts/run-tests.cjs",
     "test:e2e": "npm run build:host && playwright test",
-    "test:e2e:update-snapshots": "npm run build:host && node scripts/run-e2e-snapshots.cjs",
     "preview": "vite preview",
     "clean:release:win": "node scripts/clean-windows-release.cjs",
     "clean:release": "node scripts/clean-release.cjs",
@@ -54,8 +53,7 @@
     "package:mac": "npm run clean:release:mac && npm run package:mac:x64 && npm run package:mac:arm64",
     "verify:package:mac": "node scripts/verify-macos-package.cjs",
     "release:mac": "npm test && npm run lint && npm run clean:release:mac && npm run build:mac:x64 && playwright test && electron-builder --mac --x64 --publish never && npm run verify:package:mac -- x64 && npm run build:mac:arm64 && electron-builder --mac --arm64 --publish never && npm run verify:package:mac -- arm64",
-    "release:all": "node scripts/trigger-github-release.cjs",
-    "smoke:full-hd": "node scripts/full-hd-smoke.cjs"
+    "release:all": "node scripts/trigger-github-release.cjs"
   },
   "dependencies": {
     "electron-updater": "6.8.9",

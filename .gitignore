@@ -134,6 +134,7 @@ Desktop.ini
 /libvlc-proxy-runtime
 /.zcode
 /.taste-skill/
+/skills-lock.json
 
 output/layout/
 output/playwright/
